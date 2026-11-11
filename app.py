@@ -11,7 +11,11 @@ from flask_socketio import SocketIO, emit, join_room
 
 BASE_DIR = Path(__file__).resolve().parent
 INFRACOES_FILE = BASE_DIR / "infracoes" / "infracoes.json"
-DATA_DIR = BASE_DIR / "data"
+import os
+
+# No Vercel o sistema de arquivos é somente leitura; só /tmp aceita escrita
+ON_VERCEL = bool(os.environ.get("VERCEL"))
+DATA_DIR = Path("/tmp/data") if ON_VERCEL else BASE_DIR / "data"
 CAIXA_DB = DATA_DIR / "caixa.db"      # registros de vendas, pagamentos e furtos
 PLACAS_DB = DATA_DIR / "placas.db"    # placas fotografadas no estacionamento
 
@@ -62,7 +66,11 @@ def init_db():
         conn.commit()
 
 
-init_db()
+try:
+    init_db()
+except OSError as erro:
+    # Não derruba o site se o banco não puder ser criado (ex.: sistema somente leitura)
+    print("Aviso: bancos de dados indisponíveis:", erro)
 
 
 # ---------- Páginas ----------
