@@ -566,6 +566,7 @@ function tryArrest() {
       const inf = infracoes[Math.floor(Math.random() * infracoes.length)];
       showMsg(`✅ Furto detectado! +100 pts<br><b>Infração ${inf.codigo}: ${inf.nome}</b><br>${inf.descricao}`, 6000);
       addRegistro(`#${target.id} · detido por furto (Inf. ${inf.codigo})`, 'bad');
+      enviarDados('/api/caixa', { tipo: 'detido', cliente_id: target.id, observacao: `Infração ${inf.codigo}` });
       target.state = 'caught';
       target.timer = 0;
       target.path = [];
@@ -693,6 +694,7 @@ function registerSale(c) {
   salesCount++;
   salesTotal += total;
   addRegistro(`#${c.id} · ${itens} ${itens > 1 ? 'itens' : 'item'} · ${formatBRL(total)} · ${forma}`, 'ok');
+  enviarDados('/api/caixa', { tipo: 'venda', cliente_id: c.id, itens, total, forma_pagamento: forma });
   updateCaixaTotal();
 }
 function resetCaixa() {
@@ -735,6 +737,7 @@ function photographPlate(car) {
   sensorStats.placas++;
   recentPlates.unshift(`${car.plate} · ${new Date().toLocaleTimeString('pt-BR')}`);
   recentPlates.length = Math.min(recentPlates.length, 3);
+  enviarDados('/api/placas', { placa: car.plate, capturada_em: new Date().toISOString() });
   plateFlash.visible = true;
   plateFlashT = 0.25;
 }
@@ -757,8 +760,19 @@ function registerEscape(c) {
   flashDoor(0xffea00);
   score -= 40;
   addRegistro(`#${c.id} · SAIU SEM PAGAR (furto)`, 'bad');
+  enviarDados('/api/caixa', { tipo: 'sem_pagar', cliente_id: c.id, observacao: 'furto' });
   updateCaixaTotal();
   showMsg('🚨 Um furto escapou pela porta! -40 pts', 3000);
+}
+
+// ---------- Envio de dados ao servidor (bancos caixa.db e placas.db) ----------
+let sessaoId = '';
+function enviarDados(url, corpo) {
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessao: sessaoId, ...corpo }),
+  }).catch(() => { /* servidor offline: o jogo continua normalmente */ });
 }
 
 // ---------- Início / fim ----------
@@ -773,6 +787,7 @@ function resetGame() {
 }
 function startGame() {
   resetGame();
+  sessaoId = new Date().toISOString();
   state = 'playing';
   overlayEl.style.display = 'none';
   updateHud();
