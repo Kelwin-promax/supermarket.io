@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SupermarketSecurity.io</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Arial, Helvetica, sans-serif; }
+  canvas { display: block; }
+  .panel { position: fixed; background: rgba(0,0,0,.6); color: #fff; border-radius: 8px; pointer-events: none; }
+  #hud { top: 12px; left: 12px; padding: 10px 14px; font-size: 16px; line-height: 1.6; }
+  #hint { bottom: 12px; left: 12px; padding: 8px 12px; font-size: 14px; }
+  #msg { top: 14%; left: 50%; transform: translateX(-50%); padding: 12px 18px; font-size: 17px; max-width: 70vw; text-align: center; display: none; }
+  #caixa { top: 12px; right: 12px; width: 270px; padding: 10px 12px; font-size: 13px; box-sizing: border-box; }
+  #caixa b { font-size: 15px; color: #ffea00; }
+  #caixaTotal { margin-top: 6px; color: #b9f6ca; }
+  .reg { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.15); }
+  .reg.ok { color: #b9f6ca; }
+  .reg.bad { color: #ff8a80; }
+  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.8); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px; box-sizing: border-box; }
+  #overlay h1 { margin: 0 0 12px; font-size: clamp(28px, 6vw, 48px); }
+  #overlay p { margin: 6px 0; font-size: 18px; max-width: 640px; }
+  #overlay button { margin-top: 18px; padding: 12px 28px; font-size: 18px; border: 0; border-radius: 8px; background: #2e86de; color: #fff; cursor: pointer; }
+  #overlay button:disabled { background: #888; cursor: wait; }
+  @media (max-width: 700px) { #hint { display: none; } #caixa { display: none; } }
+</style>
+</head>
+<body>
+<div id="hud" class="panel"></div>
+<div id="hint" class="panel">WASD ou setas: mover · E: abordar cliente / usar mesa de câmeras · Q: sair das câmeras</div>
+<div id="msg" class="panel"></div>
+<div id="caixa" class="panel"><b>🧾 Caixa · Registros</b><div id="caixaLog"></div><div id="caixaTotal"></div></div>
+<div id="overlay">
+  <h1 id="ovTitle">SupermarketSecurity.io</h1>
+  <p id="ovText">Você é o segurança do supermercado. Vigie os clientes pelas câmeras da sua sala e aborde quem estiver furtando no salão. Cuidado com o trânsito da avenida.</p>
+  <p>Furto pego: +100 · Abordagem errada: -30 · Sem provas: -20 · Furto que escapa: -40</p>
+  <p>Você tem 2 minutos.</p>
+  <button id="startBtn" disabled>Carregando…</button>
+</div>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ---------- Configuração ----------
+const GAME_TIME = 120;
+const MAX_CUSTOMERS = 8;
+const MAX_CARS = 10;
+const PLAYER_SPEED = 4.5;
+const PLAYER_RADIUS = 0.4;
+const ARREST_DISTANCE = 3;
+const DESK = { x: -27, z: -5 };
+const CHECKOUT = { x: -14, z: -6 };
+const DOOR = { x: 0, z: 20 };          // entrada de clientes (parede sul)
+const CORRIDOR_Z = 15;                 // corredor livre dentro do mercado
+const SHELF_X = [-10, 0, 10];
+const SHIRTS = [0x00bcd4, 0x76ff03, 0xff6d00, 0xd500f9, 0xffea00];
+const CAR_COLORS = [0xff1744, 0x2979ff, 0xffea00, 0x00e676, 0xff9100];
+const LANE_EAST = 28, LANE_WEST = 31;  // faixas da avenida sul
+const STOP_EAST = -16, STOP_WEST = -8; // linhas de parada do semáforo
+const TURN_X = 30, GARAGE_DOOR_Z = 12; // acesso à garagem / estacionamento
+const CAMERAS = [
+  { name: 'Câmera 1 – Setor Noroeste', x: -18, z: -18, tx: 6, tz: 6 },
+  { name: 'Câmera 2 – Setor Nordeste', x: 18, z: -18, tx: -6, tz: 6 },
+  { name: 'Câmera 3 – Setor Sudoeste', x: -18, z: 18, tx: 6, tz: -6 },
+  { name: 'Câmera 4 – Setor Sudeste', x: 18, z: 18, tx: -6, tz: -6 },
+];
+const WALL = 0xfff8e1, ROOM = 0xb3e5fc;
+const MODEL_NAMES = ['guard', 'customer', 'car', 'shelf', 'counter', 'console', 'doorsensor', 'platecam', 'trafficlight', 'seccam', 'bush'];
+
+const DEFAULT_INFRACOES = [{ codigo: '001', nome: 'Furto de mercadoria', descricao: 'Item retirado da prateleira e ocultado sem pagamento.' }];
+let infracoes = DEFAULT_INFRACOES;
+fetch('/api/infracoes').then(r => (r.ok ? r.json() : null)).then(d => { if (Array.isArray(d) && d.length) infracoes = d; }).catch(() => {});
+
+// ---------- Renderer / cena ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x81d4fa);
+scene.fog = new THREE.Fog(0x81d4fa, 70, 160);
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 300);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556677, 1.0));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(12, 40, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 120 });
+sun.shadow.camera.updateProjectionMatrix();
+scene.add(sun);
+
+// Materiais que são trocados em tempo de jogo (telas, LEDs, lâmpadas, feixe)
+const screenMats = [0, 1, 2, 3].map(() => new THREE.MeshBasicMaterial({ color: 0x101820 }));
+const doorLedMats = [];
+const lampMats = [];
+const doorBeamMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
+let doorBeam = null;
+let plateFlash = null;
+
+// ---------- Utilitários ----------
+const colliders = [];
+function addBox(x, y, z, w, h, d, color, solid = true, cast = true) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color, roughness: 0.75 }));
+  mesh.position.set(x, y, z);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  if (solid) addCollider(x, z, w, d);
+  return mesh;
+}
+function addCollider(x, z, w, d) {
+  colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
+}
+
+// Empurra um objeto {x, z} para fora das caixas sólidas (círculo x retângulo)
+function resolveCollisions(o, r) {
+  for (const b of colliders) {
+    const cx = Math.max(b.minX, Math.min(o.x, b.maxX));
+    const cz = Math.max(b.minZ, Math.min(o.z, b.maxZ));
+    const dx = o.x - cx, dz = o.z - cz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < r * r) {
+      if (d2 > 1e-8) {
+        const d = Math.sqrt(d2), push = (r - d) / d;
+        o.x += dx * push; o.z += dz * push;
+      } else {
+        const left = o.x - b.minX, right = b.maxX - o.x, up = o.z - b.minZ, down = b.maxZ - o.z;
+        const m = Math.min(left, right, up, down);
+        if (m === left) o.x = b.minX - r;
+        else if (m === right) o.x = b.maxX + r;
+        else if (m === up) o.z = b.minZ - r;
+        else o.z = b.maxZ + r;
+      }
+    }
+  }
+}
+
+// ---------- Modelos feitos no Blender (só cubos, exportados como GLB) ----------
+const templates = {};
+// Clona um modelo; cloneMats = true cria materiais próprios (para pintar pessoas/carros)
+function instantiate(name, cloneMats = true) {
+  const g = templates[name].clone(true);
+  g.traverse((o) => {
+    if (!o.isMesh) return;
+    if (cloneMats) o.material = o.material.clone();
+    o.castShadow = true;
+    o.receiveShadow = true;
+  });
+  return g;
+}
+// Coloca um modelo estático no mundo
+function placeModel(name, x, y, z, ry = 0) {
+  const g = instantiate(name, false);
+  g.position.set(x, y, z);
+  g.rotation.y = ry;
+  scene.add(g);
+  return g;
+}
+// Pinta todas as peças que usam o material com esse nome (ex.: 'Shirt', 'Body')
+function paintPart(group, matName, hex) {
+  group.traverse((o) => {
+    if (o.isMesh && o.material.name === matName) o.material.color.setHex(hex);
+  });
+}
+// Cria um pivô no topo de cada perna/braço, para que eles balancem a partir do quadril/ombro
+function rigLimbs(root) {
+  root.updateMatrixWorld(true);
+  const groups = { LegL: [], LegR: [], ArmL: [], ArmR: [] };
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const key of Object.keys(groups)) {
+      if (o.name === key || o.name.startsWith(key + '_')) groups[key].push(o);
+    }
+  });
+  for (const [key, meshes] of Object.entries(groups)) {
+    if (!meshes.length) continue;
+    const box = new THREE.Box3();
+    meshes.forEach((m) => box.expandByObject(m));
+    const parent = meshes[0].parent;
+    const top = new THREE.Vector3((box.min.x + box.max.x) / 2, box.max.y, (box.min.z + box.max.z) / 2);
+    const pivot = new THREE.Group();
+    pivot.name = key + '_pivot';
+    parent.add(pivot);
+    pivot.position.copy(parent.worldToLocal(top));
+    pivot.updateMatrixWorld(true);
+    meshes.forEach((m) => pivot.attach(m));
+  }
+}
+// Pessoa: 'guard' (segurança) ou 'customer' (cliente)
+function buildPerson(kind, shirtColor = 0x00bcd4) {
+  const group = instantiate(kind);
+  paintPart(group, 'Shirt', shirtColor);
+  const limbs = {
+    legL: group.getObjectByName('LegL_pivot'), legR: group.getObjectByName('LegR_pivot'),
+    armL: group.getObjectByName('ArmL_pivot'), armR: group.getObjectByName('ArmR_pivot'),
+  };
+  const bulge = group.getObjectByName('Bulge');
+  const marker = group.getObjectByName('Marker');
+  if (bulge) bulge.visible = false;     // produto escondido
+  if (marker) marker.visible = false;   // marcação de câmera
+  return {
+    group, limbs, bag: group.getObjectByName('Bag'), bulge, marker,
+    amount: 0, phase: 0, targetYaw: 0, rate: 0,
+  };
+}
+// Balanço das pernas e dos braços (opostos entre si)
+function poseLimbs(o, phase, amount) {
+  const s = Math.sin(phase) * amount;
+  o.limbs.legL.rotation.x = s;
+  o.limbs.legR.rotation.x = -s;
+  o.limbs.armL.rotation.x = -s * 0.7;
+  o.limbs.armR.rotation.x = s * 0.7;
+}
+// Anima uma pessoa: passada, leve sobe-e-desce e giro suave em direção ao destino
+function animateWalk(o, moving, dt) {
+  const target = moving ? 0.6 : 0;
+  o.amount += (target - o.amount) * Math.min(1, dt * 10);
+  if (moving) o.phase += dt * o.rate;
+  poseLimbs(o, o.phase, o.amount);
+  const diff = Math.atan2(Math.sin(o.targetYaw - o.group.rotation.y), Math.cos(o.targetYaw - o.group.rotation.y));
+  o.group.rotation.y += diff * Math.min(1, dt * 10);
+  o.group.position.y = Math.abs(Math.sin(o.phase * 2)) * 0.06 * (o.amount / 0.6);
+}
+
+// ---------- Mundo ----------
+function buildWorld() {
+  // Grama, chão do mercado e marcações
+  addBox(0, -0.05, 0, 300, 0.1, 300, 0x66bb6a, false, false);
+  addBox(0, 0.05, 0, 40, 0.1, 40, 0xffecb3, false, false);
+  for (let i = -18; i <= 18; i += 4) {                     // ladrilhos do piso
+    addBox(i, 0.1, 0, 0.08, 0.02, 40, 0xffd54f, false, false);
+    addBox(0, 0.1, i, 40, 0.02, 0.08, 0xffd54f, false, false);
+  }
+  addBox(0, 0.08, 18, 4, 0.03, 3, 0x8d6e63, false, false);  // tapete da entrada
+
+  // Paredes do mercado (abertura oeste -> sala; abertura sul -> entrada de clientes)
+  addBox(0, 2, -20.25, 40.5, 4, 0.5, WALL);
+  addBox(20.25, 2, 0, 0.5, 4, 40.5, WALL);
+  addBox(-20.25, 2, -11, 0.5, 4, 18, WALL);
+  addBox(-20.25, 2, 11, 0.5, 4, 18, WALL);
+  addBox(-11, 2, 20.25, 18, 4, 0.5, WALL);
+  addBox(11, 2, 20.25, 18, 4, 0.5, WALL);
+  addBox(0, 3.5, 20.25, 4, 1, 0.5, WALL, false);            // verga da porta
+  addBox(0, 4.2, 20.25, 40, 0.3, 0.6, 0xff7043, false);     // faixa colorida no topo
+  addBox(0, 4.2, -20.25, 40, 0.3, 0.6, 0xff7043, false);
+
+  // Sala de segurança: x -32..-22, z -8..8
+  addBox(-27, 2, -8.25, 10.5, 4, 0.5, ROOM);
+  addBox(-27, 2, 8.25, 10.5, 4, 0.5, ROOM);
+  addBox(-32.25, 2, 0, 0.5, 4, 16.5, ROOM);
+  addBox(-22.25, 2, -5, 0.5, 4, 6, ROOM);
+  addBox(-22.25, 2, 5, 0.5, 4, 6, ROOM);
+  addBox(-27, 0.05, 0, 10, 0.1, 16, 0xffe0b2, false, false);
+  addBox(-21, 0.05, 0, 2.2, 0.1, 4.2, 0xffe0b2, false, false);
+
+  // Console de segurança (mesa + 4 monitores + cadeira)
+  const consoleObj = placeModel('console', DESK.x, 0, DESK.z, 0);
+  addCollider(DESK.x, DESK.z, 4, 1.5);
+  for (let i = 0; i < 4; i++) consoleObj.getObjectByName('Screen' + i).material = screenMats[i];
+
+  // Prateleiras com produtos
+  for (const sx of SHELF_X) {
+    placeModel('shelf', sx, 0, 0, 0);
+    addCollider(sx, 0, 1.2, 22);
+  }
+
+  // Caixa (balcão com registradora e placa)
+  placeModel('counter', -16.5, 0, -6, 0);
+  addCollider(-16.5, -6, 1.8, 4);
+
+  // Câmeras de vigilância apontando para o centro do mercado
+  for (const cam of CAMERAS) {
+    placeModel('seccam', cam.x, 0, cam.z, Math.atan2(cam.tx - cam.x, cam.tz - cam.z));
+  }
+
+  // Sensores da porta de entrada e feixe cruzando a passagem
+  for (const sx of [-2.2, 2.2]) {
+    const ds = placeModel('doorsensor', sx, 0, DOOR.z + 0.25, 0);
+    const m = new THREE.MeshBasicMaterial({ color: 0x00e676 });
+    ds.getObjectByName('LED').material = m;
+    doorLedMats.push(m);
+  }
+  doorBeam = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.05, 0.05), doorBeamMat);
+  doorBeam.position.set(0, 1.0, DOOR.z + 0.25);
+  scene.add(doorBeam);
+
+  // Avenida sul com semáforo, faixas, calçada e linhas de parada
+  addBox(0, 0.05, 29, 110, 0.1, 10, 0x546e7a, false, false);
+  for (let x = -50; x <= 50; x += 6) addBox(x, 0.12, 29.5, 3, 0.05, 0.2, 0xffffff, false, false);
+  addBox(0, 0.06, 22, 110, 0.12, 4, 0xffe082, false, false);
+  addBox(-16, 0.13, 29.5, 0.4, 0.05, 7, 0xffffff, false, false);
+  addBox(-8, 0.13, 29.5, 0.4, 0.05, 7, 0xffffff, false, false);
+  const tl = placeModel('trafficlight', -12, 0, 23.5, 0);
+  for (const [name, key, bright] of [['LampRed', 'red', 0xff3b30], ['LampYellow', 'yellow', 0xffcc00], ['LampGreen', 'green', 0x34c759]]) {
+    const m = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    tl.getObjectByName(name).material = m;
+    lampMats.push({ name: key, bright, mat: m });
+  }
+
+  // Avenidas em volta (norte, oeste e leste)
+  addBox(0, 0.05, -30, 110, 0.1, 8, 0x546e7a, false, false);
+  addBox(-40, 0.05, 0, 8, 0.1, 68, 0x546e7a, false, false);
+  addBox(42, 0.05, 0, 8, 0.1, 68, 0x546e7a, false, false);
+
+  // Garagem ao lado do mercado, com janelas e letreiro
+  addBox(29, 2.25, 2, 10, 4.5, 20, 0xff7043);
+  for (const z of [-6, -2, 2, 6]) addBox(34.05, 2.6, z, 0.1, 1.0, 1.4, 0x81d4fa, false, false);
+  addBox(29, 4.9, 11.9, 8, 0.7, 0.2, 0xffea00, false, false);
+  addBox(30, 0.06, 18, 6, 0.1, 12, 0x546e7a, false, false);    // acesso de veículos
+  addBox(30, 1.5, 12.1, 4, 3, 0.2, 0xffb300, false);           // portão da garagem
+
+  // Câmera de placas na entrada do estacionamento
+  placeModel('platecam', 26.2, 0, 23.6, Math.PI / 2);
+  plateFlash = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  plateFlash.position.set(27.6, 4.8, 23.6);
+  plateFlash.visible = false;
+  scene.add(plateFlash);
+
+  // Arbustos
+  for (let i = 0; i < 14; i++) {
+    const x = (Math.random() < 0.5 ? -1 : 1) * (50 + Math.random() * 8);
+    const z = -45 + Math.random() * 90;
+    placeModel('bush', x, 0, z, Math.random() * Math.PI * 2);
+  }
+}
+
+// ---------- Semáforo ----------
+let lightT = 0, lightState = 'green';
+function updateLight(dt) {
+  lightT = (lightT + dt) % 14;
+  lightState = lightT < 6 ? 'green' : lightT < 8 ? 'yellow' : 'red';
+  for (const l of lampMats) l.mat.color.setHex(l.name === lightState ? l.bright : 0x333333);
+}
+
+// ---------- Carros ----------
+const cars = [];
+let carSpawnTimer = 0;
+function makeCar(color) {
+  const g = instantiate('car');
+  paintPart(g, 'Body', color);
+  // placa traseira (branca), que a câmera fotografa
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.5), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  plate.position.set(-1.22, 0.7, 0);
+  g.add(plate);
+  return g;
+}
+function spawnCar() {
+  const dir = Math.random() < 0.5 ? 1 : -1;
+  const g = makeCar(CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)]);
+  const car = {
+    g, dir,
+    x: dir > 0 ? -55 : 55,
+    z: dir > 0 ? LANE_EAST : LANE_WEST,
+    v: 6 + Math.random() * 3,
+    cruise: 6 + Math.random() * 3,
+    turnIn: dir > 0 && Math.random() < 0.35,   // alguns carros entram no estacionamento
+    turning: false,
+    plate: null,
+  };
+  g.position.set(car.x, 0, car.z);
+  g.rotation.y = dir > 0 ? 0 : Math.PI;
+  scene.add(g);
+  cars.push(car);
+}
+function removeCar(car) {
+  scene.remove(car.g);
+  const i = cars.indexOf(car);
+  if (i >= 0) cars.splice(i, 1);
+}
+function updateCars(dt) {
+  for (const car of [...cars]) {
+    let target = car.cruise;
+    if (!car.turning) {
+      // Semáforo vermelho: para antes da linha
+      if (lightState === 'red') {
+        const sl = car.dir > 0 ? STOP_EAST : STOP_WEST;
+        const front = car.x + car.dir * 1.2;
+        const dist = (sl - front) * car.dir;
+        if (dist >= 0 && dist < 3) target = 0;
+      }
+      // Não bate no carro da frente
+      for (const other of cars) {
+        if (other === car || other.turning || other.dir !== car.dir || Math.abs(other.z - car.z) > 0.1) continue;
+        const gap = (other.x - car.x) * car.dir;
+        if (gap > 0 && gap < 3.2) target = 0;
+      }
+    }
+    car.v += (target - car.v) * Math.min(1, dt * 3);
+
+    if (car.turning) {
+      car.z -= 6 * dt;
+      if (car.z <= GARAGE_DOOR_Z) { removeCar(car); continue; }
+    } else {
+      car.x += car.dir * car.v * dt;
+      if (car.turnIn && car.dir > 0 && car.x >= TURN_X - 0.5) {
+        car.turning = true;
+        car.x = TURN_X;
+        car.g.rotation.y = Math.PI / 2;
+        photographPlate(car);
+      }
+      if (car.x > 60 || car.x < -60) { removeCar(car); continue; }
+    }
+    car.g.position.set(car.x, 0, car.z);
+  }
+}
+
+// ---------- Jogador (segurança) ----------
+const player = { x: -27, z: 0, yaw: Math.PI };
+let playerView = null;   // criado quando os modelos carregarem
+
+// ---------- Clientes ----------
+const customers = [];
+let spawnTimer = 0;
+let customerSeq = 0;
+
+function randomShelfSpot() {
+  const sx = SHELF_X[Math.floor(Math.random() * SHELF_X.length)];
+  return { x: sx + (Math.random() < 0.5 ? -1.6 : 1.6), z: -9 + Math.random() * 18 };
+}
+function shelfRouteFrom(x, z) {
+  const s = randomShelfSpot();
+  return [{ x, z: CORRIDOR_Z }, { x: s.x, z: CORRIDOR_Z }, s];
+}
+function checkoutRouteFrom(x, z) {
+  return [{ x, z: CORRIDOR_Z }, { x: CHECKOUT.x, z: CORRIDOR_Z }, { x: CHECKOUT.x, z: CHECKOUT.z }];
+}
+function exitRouteFrom(x, z) {
+  return [{ x, z: CORRIDOR_Z }, { x: DOOR.x, z: CORRIDOR_Z }, { x: DOOR.x, z: DOOR.z + 2 }];
+}
+
+function spawnCustomer() {
+  const thief = Math.random() < 0.3;
+  const shirt = thief ? 0x212121 : SHIRTS[Math.floor(Math.random() * SHIRTS.length)];
+  const p = buildPerson('customer', shirt);
+  p.bag.visible = !thief;              // quem furta não carrega cesta
+  const c = {
+    ...p, id: ++customerSeq, wasInside: false, thief, stolen: false, checked: false, visits: 0,
+    state: 'walk', after: 'browse', path: [], timer: 0, walkTime: 0, browseTime: 0,
+    speed: thief ? 2.0 : 1.5, rate: thief ? 5.2 : 3.9, x: DOOR.x, z: DOOR.z + 2,
+  };
+  c.path = shelfRouteFrom(c.x, c.z);
+  c.group.position.set(c.x, 0, c.z);
+  scene.add(c.group);
+  customers.push(c);
+}
+
+function removeCustomer(c) {
+  scene.remove(c.group);
+  const i = customers.indexOf(c);
+  if (i >= 0) customers.splice(i, 1);
+}
+
+function walkTo(c, path, after) {
+  c.path = path;
+  c.after = after;
+  c.state = 'walk';
+  c.walkTime = 0;
+}
+
+function enterState(c, state) {
+  c.state = state;
+  c.timer = 0;
+  if (state === 'browse') c.browseTime = 1.5 + Math.random() * 2.5;
+  if (state === 'pay') registerSale(c);
+  if (state === 'gone') {
+    if (c.thief && c.stolen) registerEscape(c);
+    removeCustomer(c);
+  }
+}
+
+function moveTowards(c, tx, tz, dt) {
+  const dx = tx - c.x, dz = tz - c.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 0.2) return true;
+  const step = Math.min(d, c.speed * dt);
+  c.x += (dx / d) * step;
+  c.z += (dz / d) * step;
+  resolveCollisions(c, 0.4);
+  c.targetYaw = Math.atan2(dx, dz);
+  return false;
+}
+
+function finishBrowse(c) {
+  c.visits++;
+  if (c.thief && !c.stolen && Math.random() < 0.8) {
+    c.stolen = true;
+    c.bulge.visible = true;
+  }
+  if (c.visits < 2) walkTo(c, shelfRouteFrom(c.x, c.z), 'browse');
+  else if (c.thief && c.stolen) walkTo(c, exitRouteFrom(c.x, c.z), 'gone');   // pula o caixa
+  else walkTo(c, checkoutRouteFrom(c.x, c.z), 'pay');
+}
+
+function updateCustomer(c, dt) {
+  c.timer += dt;
+  if (c.state === 'walk') {
+    c.walkTime += dt;
+    if (c.walkTime > 40) { removeCustomer(c); return; }   // segurança contra travamento
+    if (c.path.length) {
+      const wp = c.path[0];
+      if (moveTowards(c, wp.x, wp.z, dt)) c.path.shift();
+    }
+    if (c.path.length === 0) enterState(c, c.after);
+  } else if (c.state === 'browse') {
+    if (c.timer >= c.browseTime) finishBrowse(c);
+  } else if (c.state === 'pay') {
+    if (c.timer >= 2) walkTo(c, exitRouteFrom(c.x, c.z), 'gone');
+  } else if (c.state === 'caught') {
+    if (c.timer >= 2) removeCustomer(c);
+  }
+  if (c.state !== 'caught') c.marker.visible = monitorMode && c.stolen;
+  c.group.position.set(c.x, 0, c.z);
+  checkDoor(c);
+  animateWalk(c, c.state === 'walk', dt);
+}
+
+// ---------- Estado do jogo ----------
+let state = 'menu';            // menu | playing | over
+let score = 0, caught = 0, escaped = 0, timeLeft = GAME_TIME;
+let monitorMode = false, camIndex = 0;
+
+const hudEl = document.getElementById('hud');
+const msgEl = document.getElementById('msg');
+const overlayEl = document.getElementById('overlay');
+let msgTimer = null;
+
+function showMsg(html, ms = 2500) {
+  msgEl.innerHTML = html;
+  msgEl.style.display = 'block';
+  clearTimeout(msgTimer);
+  msgTimer = setTimeout(() => (msgEl.style.display = 'none'), ms);
+}
+function updateHud() {
+  let text = `Pontos: <b>${score}</b><br>Tempo: ${Math.ceil(timeLeft)}s<br>Furtos pegos: ${caught}<br>Escapes: ${escaped}`;
+  text += `<br>Porta: ${sensorStats.entradas} entradas · ${sensorStats.saidas} saídas`;
+  text += `<br>Placas capturadas: ${sensorStats.placas}`;
+  if (recentPlates.length) text += `<br><small>${recentPlates.join('<br>')}</small>`;
+  if (monitorMode) text += `<br><b>MODO CÂMERAS</b> – ${CAMERAS[camIndex].name}<br>1-4: trocar câmera · Q: sair`;
+  hudEl.innerHTML = text;
+}
+
+function tryArrest() {
+  let target = null, best = ARREST_DISTANCE;
+  for (const c of customers) {
+    if (c.state === 'caught' || c.state === 'gone') continue;
+    const d = Math.hypot(c.x - player.x, c.z - player.z);
+    if (d < best) { best = d; target = c; }
+  }
+  if (!target) return showMsg('Nenhum cliente por perto.', 1500);
+
+  if (target.thief) {
+    if (target.stolen) {
+      caught++;
+      score += 100;
+      const inf = infracoes[Math.floor(Math.random() * infracoes.length)];
+      showMsg(`✅ Furto detectado! +100 pts<br><b>Infração ${inf.codigo}: ${inf.nome}</b><br>${inf.descricao}`, 6000);
+      addRegistro(`#${target.id} · detido por furto (Inf. ${inf.codigo})`, 'bad');
+      target.state = 'caught';
+      target.timer = 0;
+      target.path = [];
+      paintPart(target.group, 'Shirt', 0xff1744);
+      target.marker.visible = false;
+    } else {
+      score -= 20;
+      showMsg('Sem provas: este cliente não pegou nada. -20 pts', 3000);
+    }
+  } else {
+    if (target.checked) return showMsg('Este cliente já foi abordado.', 1500);
+    target.checked = true;
+    score -= 30;
+    showMsg('Cliente inocente abordado! Ele ficou irritado. -30 pts', 3000);
+  }
+  updateHud();
+}
+
+// ---------- Sala de câmeras ----------
+function nearDesk() {
+  return Math.hypot(player.x - DESK.x, player.z - DESK.z) < 3;
+}
+function enterMonitor() {
+  monitorMode = true;
+  camIndex = 0;
+}
+function exitMonitor() {
+  monitorMode = false;
+}
+function updateScreens() {
+  screenMats.forEach((m, i) => {
+    if (!monitorMode) m.color.setHex(0x101820);
+    else m.color.setHex(i === camIndex ? 0x7fd8ff : 0x2a5a7a);
+  });
+}
+
+// ---------- Jogador: movimento e câmera ----------
+function updatePlayer(dt) {
+  let f = 0, s = 0;
+  if (keys.KeyW || keys.ArrowUp) f += 1;
+  if (keys.KeyS || keys.ArrowDown) f -= 1;
+  if (keys.KeyD || keys.ArrowRight) s += 1;
+  if (keys.KeyA || keys.ArrowLeft) s -= 1;
+  // Câmera fixa em diagonal: W = para longe da câmera, D = direita da tela
+  const k = 1 / Math.SQRT2;
+  let mx = k * f + k * s, mz = -k * f + k * s;
+  const len = Math.hypot(mx, mz);
+  if (len > 0) {
+    mx /= len; mz /= len;
+    player.x += mx * PLAYER_SPEED * dt;
+    player.z += mz * PLAYER_SPEED * dt;
+    player.yaw = Math.atan2(mx, mz);      // o segurança olha para onde anda
+    resolveCollisions(player, PLAYER_RADIUS);
+    player.x = Math.max(-60, Math.min(60, player.x));
+    player.z = Math.max(-60, Math.min(60, player.z));
+  }
+  if (playerView) {
+    playerView.group.position.set(player.x, 0, player.z);
+    playerView.targetYaw = player.yaw;
+    animateWalk(playerView, len > 0, dt);
+  }
+}
+
+function updateCamera() {
+  if (monitorMode) {
+    const cam = CAMERAS[camIndex];
+    camera.position.set(cam.x * 0.85, 3.6, cam.z * 0.85);
+    camera.lookAt(cam.tx, 1.2, cam.tz);
+    return;
+  }
+  // Ângulo alto e diagonal, como na imagem de referência
+  camera.position.set(player.x - 17, 21, player.z + 17);
+  camera.lookAt(player.x, 0.5, player.z);
+}
+
+// ---------- Entrada ----------
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (state !== 'playing') return;
+  if (monitorMode) {
+    if (e.code === 'KeyQ' || e.code === 'Escape') exitMonitor();
+    if (e.code === 'Digit1') camIndex = 0;
+    if (e.code === 'Digit2') camIndex = 1;
+    if (e.code === 'Digit3') camIndex = 2;
+    if (e.code === 'Digit4') camIndex = 3;
+    updateHud();
+    return;
+  }
+  if (e.code === 'KeyE' && !e.repeat) {
+    if (nearDesk()) enterMonitor();
+    else tryArrest();
+    updateHud();
+  }
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- Caixa: registro de compras e pagamentos ----------
+const caixaLog = document.getElementById('caixaLog');
+const caixaTotal = document.getElementById('caixaTotal');
+let salesCount = 0, salesTotal = 0, lostCount = 0;
+const FORMAS_PAGTO = ['Dinheiro', 'Cartão', 'Pix'];
+const formatBRL = (v) => 'R$ ' + v.toFixed(2).replace('.', ',');
+function addRegistro(text, kind) {
+  const div = document.createElement('div');
+  div.className = 'reg ' + kind;
+  div.textContent = text;
+  caixaLog.prepend(div);
+  while (caixaLog.children.length > 7) caixaLog.lastChild.remove();
+}
+function updateCaixaTotal() {
+  caixaTotal.textContent = `Vendas: ${salesCount} · Total: ${formatBRL(salesTotal)} · Sem pagar: ${lostCount}`;
+}
+function registerSale(c) {
+  const itens = 1 + Math.floor(Math.random() * 6);
+  let total = 0;
+  for (let i = 0; i < itens; i++) total += 2 + Math.random() * 18;
+  total = Math.round(total * 100) / 100;
+  const forma = FORMAS_PAGTO[Math.floor(Math.random() * FORMAS_PAGTO.length)];
+  salesCount++;
+  salesTotal += total;
+  addRegistro(`#${c.id} · ${itens} ${itens > 1 ? 'itens' : 'item'} · ${formatBRL(total)} · ${forma}`, 'ok');
+  updateCaixaTotal();
+}
+function resetCaixa() {
+  salesCount = 0; salesTotal = 0; lostCount = 0;
+  sensorStats.entradas = 0; sensorStats.saidas = 0; sensorStats.placas = 0;
+  recentPlates.length = 0;
+  caixaLog.innerHTML = '';
+  updateCaixaTotal();
+}
+
+// ---------- Sensores da porta e câmera de placas ----------
+const sensorStats = { entradas: 0, saidas: 0, placas: 0 };
+const recentPlates = [];
+let doorFlashT = 0, plateFlashT = 0;
+const PLATE_LETTERS = 'ABCDEFGHIJKLMNOPRSTUVWXYZ';
+const pick = (s) => s[Math.floor(Math.random() * s.length)];
+const digit = () => String(Math.floor(Math.random() * 10));
+// Placa no padrão Mercosul: LLLNLNN
+const randomPlate = () => pick(PLATE_LETTERS) + pick(PLATE_LETTERS) + pick(PLATE_LETTERS) + digit() + pick(PLATE_LETTERS) + digit() + digit();
+
+function flashDoor(hex) {
+  doorBeamMat.color.setHex(hex);
+  doorLedMats.forEach((m) => m.color.setHex(hex));
+  doorFlashT = 0.6;
+}
+// Conta entradas e saídas quando um cliente cruza a porta
+function checkDoor(c) {
+  const inside = c.z < DOOR.z;
+  if (inside !== c.wasInside) {
+    if (Math.abs(c.x - DOOR.x) < 2.5 && Math.abs(c.z - DOOR.z) < 1.5) {
+      if (inside) { sensorStats.entradas++; flashDoor(0x00e676); }
+      else { sensorStats.saidas++; flashDoor(0x40c4ff); }
+    }
+    c.wasInside = inside;
+  }
+}
+// Foto da placa quando um carro entra no estacionamento
+function photographPlate(car) {
+  car.plate = randomPlate();
+  sensorStats.placas++;
+  recentPlates.unshift(`${car.plate} · ${new Date().toLocaleTimeString('pt-BR')}`);
+  recentPlates.length = Math.min(recentPlates.length, 3);
+  plateFlash.visible = true;
+  plateFlashT = 0.25;
+}
+function updateFlashes(dt) {
+  if (doorFlashT > 0) {
+    doorFlashT -= dt;
+    if (doorFlashT <= 0) {
+      doorBeamMat.color.setHex(0xff1744);
+      doorLedMats.forEach((m) => m.color.setHex(0x00e676));
+    }
+  }
+  if (plateFlashT > 0) {
+    plateFlashT -= dt;
+    if (plateFlashT <= 0) plateFlash.visible = false;
+  }
+}
+function registerEscape(c) {
+  escaped++;
+  lostCount++;
+  flashDoor(0xffea00);
+  score -= 40;
+  addRegistro(`#${c.id} · SAIU SEM PAGAR (furto)`, 'bad');
+  updateCaixaTotal();
+  showMsg('🚨 Um furto escapou pela porta! -40 pts', 3000);
+}
+
+// ---------- Início / fim ----------
+function resetGame() {
+  for (const c of [...customers]) removeCustomer(c);
+  for (const car of [...cars]) removeCar(car);
+  score = 0; caught = 0; escaped = 0; timeLeft = GAME_TIME;
+  player.x = -27; player.z = 0; player.yaw = Math.PI;
+  monitorMode = false; camIndex = 0;
+  spawnTimer = 0; carSpawnTimer = 0;
+  resetCaixa();
+}
+function startGame() {
+  resetGame();
+  state = 'playing';
+  overlayEl.style.display = 'none';
+  updateHud();
+}
+function endGame() {
+  state = 'over';
+  monitorMode = false;
+  document.getElementById('ovTitle').textContent = 'Fim de turno';
+  document.getElementById('ovText').textContent = `Pontuação final: ${score} · Furtos pegos: ${caught} · Escapes: ${escaped}`;
+  document.getElementById('startBtn').textContent = 'Jogar novamente';
+  overlayEl.style.display = 'flex';
+}
+document.getElementById('startBtn').addEventListener('click', startGame);
+
+// ---------- Carregamento dos modelos ----------
+const gltfLoader = new GLTFLoader();
+const loadModel = (name) => new Promise((resolve, reject) =>
+  gltfLoader.load(`/static/models/${name}.glb`, (g) => resolve(g.scene), undefined, reject));
+
+Promise.all(MODEL_NAMES.map(loadModel))
+  .then((scenes) => {
+    MODEL_NAMES.forEach((n, i) => { templates[n] = scenes[i]; });
+    rigLimbs(templates.guard);
+    rigLimbs(templates.customer);
+    buildWorld();
+    playerView = buildPerson('guard', 0x1e88e5);
+    playerView.group.position.set(player.x, 0, player.z);
+    playerView.group.rotation.y = player.yaw;
+    playerView.targetYaw = player.yaw;
+    playerView.rate = PLAYER_SPEED * 2.6;
+    scene.add(playerView.group);
+    const btn = document.getElementById('startBtn');
+    btn.disabled = false;
+    btn.textContent = 'Começar';
+  })
+  .catch((err) => {
+    document.getElementById('ovText').textContent = 'Erro ao carregar os modelos: ' + err.message;
+    document.getElementById('startBtn').textContent = 'Erro';
+  });
+
+// ---------- Loop ----------
+const clock = new THREE.Clock();
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (state === 'playing') {
+    updateLight(dt);
+    if (!monitorMode) updatePlayer(dt);
+    timeLeft -= dt;
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0 && customers.length < MAX_CUSTOMERS) {
+      spawnCustomer();
+      spawnTimer = 2 + Math.random() * 2;
+    }
+    carSpawnTimer -= dt;
+    if (carSpawnTimer <= 0 && cars.length < MAX_CARS) {
+      spawnCar();
+      carSpawnTimer = 2.5 + Math.random() * 2;
+    }
+    for (const c of [...customers]) updateCustomer(c, dt);
+    updateCars(dt);
+    updateHud();
+  } else {
+    updateLight(dt);
+  }
+  updateFlashes(dt);
+  updateScreens();
+  updateCamera();
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(animate);
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[
+  {
+    "codigo": "001",
+    "nome": "Furto de mercadoria",
+    "descricao": "Item retirado da prateleira e ocultado sem pagamento."
+  },
+  {
+    "codigo": "002",
+    "nome": "Ocultação em bolsa ou bolso",
+    "descricao": "Produto escondido em bolsa, mochila ou roupas para não ser pago."
+  },
+  {
+    "codigo": "003",
+    "nome": "Troca de etiqueta",
+    "descricao": "Etiqueta de preço trocada por outra de um item mais barato."
+  },
+  {
+    "codigo": "004",
+    "nome": "Evasão no caixa",
+    "descricao": "Tentativa de deixar o mercado sem passar pelo caixa com produtos não pagos."
+  }
+]
