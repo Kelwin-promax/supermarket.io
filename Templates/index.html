@@ -974,9 +974,19 @@ function telaMenu() {
   document.getElementById('btnCriar').onclick = criarSala;
   document.getElementById('btnEntrar').onclick = entrarSala;
 }
+// Garante conexão com o servidor antes de criar/entrar em sala; avisa se não conseguir
+function comConexao(acao) {
+  if (socket.connected) return acao();
+  erroMenu('Conectando ao servidor...');
+  const timer = setTimeout(() => erroMenu('Não foi possível conectar ao servidor. Verifique se o site está no ar.'), 8000);
+  socket.once('connect', () => { clearTimeout(timer); erroMenu(''); acao(); });
+}
 function criarSala() {
   const nome = document.getElementById('nomeInput').value.trim();
   if (!nome) return erroMenu('Digite seu nome.');
+  comConexao(() => criarSalaAgora(nome));
+}
+function criarSalaAgora(nome) {
   socket.emit('criar_sala', { nome }, (resp) => {
     if (resp.erro) return erroMenu(resp.erro);
     net.codigo = resp.codigo;
@@ -992,6 +1002,9 @@ function entrarSala() {
   const codigo = document.getElementById('codigoInput').value.trim().toUpperCase();
   if (!nome) return erroMenu('Digite seu nome.');
   if (!codigo) return erroMenu('Digite o código da sala.');
+  comConexao(() => entrarSalaAgora(codigo, nome));
+}
+function entrarSalaAgora(codigo, nome) {
   socket.emit('entrar_sala', { codigo, nome, papel: 'seguranca' }, (resp) => {
     if (resp.erro) return erroMenu(resp.erro);
     net.codigo = resp.codigo;
