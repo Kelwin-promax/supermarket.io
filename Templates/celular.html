@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Celular do segurança · SupermarketSecurity.io</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #12161c; color: #fff; min-height: 100vh; }
+  header { background: #1e88e5; padding: 14px 16px; font-size: 18px; font-weight: bold; }
+  header small { display: block; font-weight: normal; font-size: 13px; opacity: .9; margin-top: 2px; }
+  main { padding: 16px; max-width: 520px; margin: 0 auto; }
+  input, textarea { width: 100%; padding: 12px; font-size: 16px; border-radius: 8px; border: 0; margin: 6px 0 12px; background: #263238; color: #fff; }
+  button { width: 100%; padding: 14px; font-size: 17px; border: 0; border-radius: 10px; background: #2e86de; color: #fff; font-weight: bold; cursor: pointer; margin-top: 4px; }
+  button:disabled { background: #555; }
+  button.sec { background: #37474f; }
+  .erro { color: #ff8a80; min-height: 20px; }
+  .card { background: #1e262e; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .file-btn { display: block; text-align: center; padding: 16px; border-radius: 10px; background: #ffea00; color: #111; font-weight: bold; font-size: 17px; cursor: pointer; }
+  .file-btn input { display: none; }
+  #preview { width: 100%; border-radius: 10px; margin-top: 12px; display: none; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid figure { margin: 0; background: #000; border-radius: 8px; overflow: hidden; }
+  .grid img { width: 100%; display: block; aspect-ratio: 4/3; object-fit: cover; }
+  .grid figcaption { font-size: 12px; padding: 6px; color: #cfd8dc; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>📱 Celular do segurança<small id="subtitulo">Entre na sala com o código do anfitrião</small></header>
+<main>
+  <section id="tela-entrar" class="card">
+    <label>Código da sala<input id="codigo" maxlength="5" autocapitalize="characters" style="text-transform:uppercase"></label>
+    <label>Seu nome<input id="nome" maxlength="16"></label>
+    <button id="btnEntrar">Entrar na sala</button>
+    <p id="erroEntrar" class="erro"></p>
+  </section>
+
+  <section id="tela-foto" class="hidden">
+    <div class="card">
+      <label class="file-btn">📷 Tirar foto / escolher imagem
+        <input id="arquivo" type="file" accept="image/*" capture="environment">
+      </label>
+      <img id="preview" alt="Prévia">
+      <label>Legenda (opcional)<input id="legenda" maxlength="80" placeholder="Ex.: cliente no corredor 3"></label>
+      <button id="btnEnviar" disabled>Compartilhar com a equipe</button>
+      <p id="erroFoto" class="erro"></p>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Fotos da equipe</h3>
+      <div id="galeria" class="grid"></div>
+      <p id="vazio" style="color:#90a4ae">Nenhuma foto ainda.</p>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+const socket = io();
+let fotoPronta = null;
+
+const $ = (id) => document.getElementById(id);
+
+// Reduz a imagem para no máximo 800px e converte para JPEG (cabe bem no socket)
+function comprimir(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const escala = Math.min(1, 800 / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * escala);
+      canvas.height = Math.round(img.height * escala);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não foi possível ler a imagem.')); };
+    img.src = url;
+  });
+}
+
+function adicionarNaGaleria(f) {
+  const fig = document.createElement('figure');
+  fig.innerHTML = `<img src="${f.imagem}" alt=""><figcaption>${f.de} · ${f.hora}${f.legenda ? '<br>' + f.legenda : ''}</figcaption>`;
+  $('galeria').prepend(fig);
+  $('vazio').classList.add('hidden');
+}
+
+$('btnEntrar').addEventListener('click', () => {
+  const codigo = $('codigo').value.trim().toUpperCase();
+  const nome = $('nome').value.trim();
+  $('erroEntrar').textContent = '';
+  if (!codigo || !nome) { $('erroEntrar').textContent = 'Informe o código e seu nome.'; return; }
+  socket.emit('entrar_sala', { codigo, nome, papel: 'celular' }, (resp) => {
+    if (resp.erro) { $('erroEntrar').textContent = resp.erro; return; }
+    $('subtitulo').textContent = `Sala ${resp.codigo} · ${nome}`;
+    $('tela-entrar').classList.add('hidden');
+    $('tela-foto').classList.remove('hidden');
+    (resp.fotos || []).forEach(adicionarNaGaleria);
+  });
+});
+
+$('arquivo').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  $('erroFoto').textContent = '';
+  if (!file) return;
+  try {
+    fotoPronta = await comprimir(file);
+    $('preview').src = fotoPronta;
+    $('preview').style.display = 'block';
+    $('btnEnviar').disabled = false;
+  } catch (err) {
+    $('erroFoto').textContent = err.message;
+  }
+});
+
+$('btnEnviar').addEventListener('click', () => {
+  if (!fotoPronta) return;
+  $('btnEnviar').disabled = true;
+  socket.emit('foto', { imagem: fotoPronta, legenda: $('legenda').value.trim() }, (resp) => {
+    if (resp && resp.erro) {
+      $('erroFoto').textContent = resp.erro;
+      $('btnEnviar').disabled = false;
+      return;
+    }
+    $('erroFoto').textContent = '';
+    $('legenda').value = '';
+    $('arquivo').value = '';
+    $('preview').style.display = 'none';
+    fotoPronta = null;
+  });
+});
+
+socket.on('foto', adicionarNaGaleria);
+socket.on('sala_encerrada', (d) => {
+  $('subtitulo').textContent = d.motivo || 'A sala foi encerrada.';
+  $('btnEnviar').disabled = true;
+});
+</script>
+</body>
+</html>

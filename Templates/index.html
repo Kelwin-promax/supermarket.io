@@ -8,7 +8,8 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Arial, Helvetica, sans-serif; }
   canvas { display: block; }
   .panel { position: fixed; background: rgba(0,0,0,.6); color: #fff; border-radius: 8px; pointer-events: none; }
-  #hud { top: 12px; left: 12px; padding: 10px 14px; font-size: 16px; line-height: 1.6; }
+  #hud { top: 12px; left: 12px; padding: 10px 14px; font-size: 15px; line-height: 1.5; max-width: 300px; }
+  #hud b { color: #ffea00; }
   #hint { bottom: 12px; left: 12px; padding: 8px 12px; font-size: 14px; }
   #msg { top: 14%; left: 50%; transform: translateX(-50%); padding: 12px 18px; font-size: 17px; max-width: 70vw; text-align: center; display: none; }
   #caixa { top: 12px; right: 12px; width: 270px; padding: 10px 12px; font-size: 13px; box-sizing: border-box; }
@@ -17,12 +18,26 @@
   .reg { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.15); }
   .reg.ok { color: #b9f6ca; }
   .reg.bad { color: #ff8a80; }
-  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.8); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px; box-sizing: border-box; }
-  #overlay h1 { margin: 0 0 12px; font-size: clamp(28px, 6vw, 48px); }
-  #overlay p { margin: 6px 0; font-size: 18px; max-width: 640px; }
-  #overlay button { margin-top: 18px; padding: 12px 28px; font-size: 18px; border: 0; border-radius: 8px; background: #2e86de; color: #fff; cursor: pointer; }
+  #fotos { bottom: 12px; right: 12px; width: 240px; padding: 8px; font-size: 12px; }
+  #fotos b { color: #ffea00; }
+  #fotosLista { display: flex; gap: 6px; overflow: hidden; margin-top: 6px; }
+  #fotosLista figure { margin: 0; width: 72px; flex: none; }
+  #fotosLista img { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; display: block; }
+  #fotosLista figcaption { font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.85); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px; box-sizing: border-box; overflow-y: auto; }
+  #overlay h1 { margin: 0 0 8px; font-size: clamp(26px, 5vw, 44px); }
+  #overlay p { margin: 6px 0; font-size: 17px; max-width: 640px; }
+  #overlay input { display: block; margin: 6px auto; padding: 10px 12px; font-size: 16px; border-radius: 6px; border: 0; width: 240px; text-align: center; }
+  #overlay button { margin: 8px; padding: 12px 24px; font-size: 17px; border: 0; border-radius: 8px; background: #2e86de; color: #fff; cursor: pointer; }
   #overlay button:disabled { background: #888; cursor: wait; }
-  @media (max-width: 700px) { #hint { display: none; } #caixa { display: none; } }
+  #overlay button.sec { background: #37474f; }
+  #overlay .codigo { font-size: 44px; letter-spacing: 8px; color: #ffea00; font-weight: bold; margin: 10px 0; }
+  #overlay ul { list-style: none; padding: 0; margin: 10px 0; }
+  #overlay li { padding: 4px 0; font-size: 17px; }
+  #overlay .erro { color: #ff8a80; min-height: 22px; }
+  #overlay table { border-collapse: collapse; margin: 10px auto; font-size: 17px; }
+  #overlay td, #overlay th { padding: 4px 14px; border-bottom: 1px solid rgba(255,255,255,.2); }
+  @media (max-width: 700px) { #hint, #caixa, #fotos { display: none; } }
 </style>
 </head>
 <body>
@@ -30,19 +45,16 @@
 <div id="hint" class="panel">WASD ou setas: mover · E: abordar cliente / usar mesa de câmeras · Q: sair das câmeras</div>
 <div id="msg" class="panel"></div>
 <div id="caixa" class="panel"><b>🧾 Caixa · Registros</b><div id="caixaLog"></div><div id="caixaTotal"></div></div>
-<div id="overlay">
-  <h1 id="ovTitle">SupermarketSecurity.io</h1>
-  <p id="ovText">Você é o segurança do supermercado. Vigie os clientes pelas câmeras da sua sala e aborde quem estiver furtando no salão. Cuidado com o trânsito da avenida.</p>
-  <p>Furto pego: +100 · Abordagem errada: -30 · Sem provas: -20 · Furto que escapa: -40</p>
-  <p>Você tem 2 minutos.</p>
-  <button id="startBtn" disabled>Carregando…</button>
-</div>
+<div id="fotos" class="panel"><b>📷 Fotos da equipe</b><div id="fotosLista"></div></div>
+<div id="overlay"></div>
+
 <script type="importmap">
 { "imports": {
     "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
     "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
 } }
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -56,14 +68,15 @@ const PLAYER_RADIUS = 0.4;
 const ARREST_DISTANCE = 3;
 const DESK = { x: -27, z: -5 };
 const CHECKOUT = { x: -14, z: -6 };
-const DOOR = { x: 0, z: 20 };          // entrada de clientes (parede sul)
-const CORRIDOR_Z = 15;                 // corredor livre dentro do mercado
+const DOOR = { x: 0, z: 20 };
+const CORRIDOR_Z = 15;
 const SHELF_X = [-10, 0, 10];
 const SHIRTS = [0x00bcd4, 0x76ff03, 0xff6d00, 0xd500f9, 0xffea00];
 const CAR_COLORS = [0xff1744, 0x2979ff, 0xffea00, 0x00e676, 0xff9100];
-const LANE_EAST = 28, LANE_WEST = 31;  // faixas da avenida sul
-const STOP_EAST = -16, STOP_WEST = -8; // linhas de parada do semáforo
-const TURN_X = 30, GARAGE_DOOR_Z = 12; // acesso à garagem / estacionamento
+const GUARD_COLORS = [0x1e88e5, 0xe53935, 0x43a047, 0xfb8c00, 0x8e24aa, 0x00acc1];
+const LANE_EAST = 28, LANE_WEST = 31;
+const STOP_EAST = -16, STOP_WEST = -8;
+const TURN_X = 30, GARAGE_DOOR_Z = 12;
 const CAMERAS = [
   { name: 'Câmera 1 – Setor Noroeste', x: -18, z: -18, tx: 6, tz: 6 },
   { name: 'Câmera 2 – Setor Nordeste', x: 18, z: -18, tx: -6, tz: 6 },
@@ -76,6 +89,24 @@ const MODEL_NAMES = ['guard', 'customer', 'car', 'shelf', 'counter', 'console', 
 const DEFAULT_INFRACOES = [{ codigo: '001', nome: 'Furto de mercadoria', descricao: 'Item retirado da prateleira e ocultado sem pagamento.' }];
 let infracoes = DEFAULT_INFRACOES;
 fetch('/api/infracoes').then(r => (r.ok ? r.json() : null)).then(d => { if (Array.isArray(d) && d.length) infracoes = d; }).catch(() => {});
+
+// ---------- Rede ----------
+const socket = io();
+const net = { codigo: '', isHost: false, jogadores: [], id: '' };
+let sessaoId = '';
+let modelsReady = false;
+let state = 'menu';            // menu | lobby | playing | over
+let scores = {};               // (anfitrião) pontuação por jogador
+let placar = [];               // (convidados) placar vindo do anfitrião
+const posicoes = {};           // (anfitrião) posição de cada guarda
+const remotos = new Map();     // outros guardas: id -> {p, x, z, tx, tz, yaw}
+const remotosClientes = new Map(); // (convidados) clientes: id -> registro
+const remotosCarros = new Map();   // (convidados) carros: id -> registro
+const fotos = [];
+
+function emitir(tipo, dados = {}) {
+  if (socket.connected) socket.emit('evento', { tipo, ...dados });
+}
 
 // ---------- Renderer / cena ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -100,7 +131,7 @@ Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, n
 sun.shadow.camera.updateProjectionMatrix();
 scene.add(sun);
 
-// Materiais que são trocados em tempo de jogo (telas, LEDs, lâmpadas, feixe)
+// Materiais trocados em tempo de jogo (telas, LEDs, lâmpadas, feixe)
 const screenMats = [0, 1, 2, 3].map(() => new THREE.MeshBasicMaterial({ color: 0x101820 }));
 const doorLedMats = [];
 const lampMats = [];
@@ -122,8 +153,6 @@ function addBox(x, y, z, w, h, d, color, solid = true, cast = true) {
 function addCollider(x, z, w, d) {
   colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
 }
-
-// Empurra um objeto {x, z} para fora das caixas sólidas (círculo x retângulo)
 function resolveCollisions(o, r) {
   for (const b of colliders) {
     const cx = Math.max(b.minX, Math.min(o.x, b.maxX));
@@ -146,9 +175,8 @@ function resolveCollisions(o, r) {
   }
 }
 
-// ---------- Modelos feitos no Blender (só cubos, exportados como GLB) ----------
+// ---------- Modelos (Blender -> GLB, só cubos) ----------
 const templates = {};
-// Clona um modelo; cloneMats = true cria materiais próprios (para pintar pessoas/carros)
 function instantiate(name, cloneMats = true) {
   const g = templates[name].clone(true);
   g.traverse((o) => {
@@ -159,7 +187,6 @@ function instantiate(name, cloneMats = true) {
   });
   return g;
 }
-// Coloca um modelo estático no mundo
 function placeModel(name, x, y, z, ry = 0) {
   const g = instantiate(name, false);
   g.position.set(x, y, z);
@@ -167,13 +194,11 @@ function placeModel(name, x, y, z, ry = 0) {
   scene.add(g);
   return g;
 }
-// Pinta todas as peças que usam o material com esse nome (ex.: 'Shirt', 'Body')
 function paintPart(group, matName, hex) {
   group.traverse((o) => {
     if (o.isMesh && o.material.name === matName) o.material.color.setHex(hex);
   });
 }
-// Cria um pivô no topo de cada perna/braço, para que eles balancem a partir do quadril/ombro
 function rigLimbs(root) {
   root.updateMatrixWorld(true);
   const groups = { LegL: [], LegR: [], ArmL: [], ArmR: [] };
@@ -197,7 +222,6 @@ function rigLimbs(root) {
     meshes.forEach((m) => pivot.attach(m));
   }
 }
-// Pessoa: 'guard' (segurança) ou 'customer' (cliente)
 function buildPerson(kind, shirtColor = 0x00bcd4) {
   const group = instantiate(kind);
   paintPart(group, 'Shirt', shirtColor);
@@ -207,14 +231,13 @@ function buildPerson(kind, shirtColor = 0x00bcd4) {
   };
   const bulge = group.getObjectByName('Bulge');
   const marker = group.getObjectByName('Marker');
-  if (bulge) bulge.visible = false;     // produto escondido
-  if (marker) marker.visible = false;   // marcação de câmera
+  if (bulge) bulge.visible = false;
+  if (marker) marker.visible = false;
   return {
     group, limbs, bag: group.getObjectByName('Bag'), bulge, marker,
     amount: 0, phase: 0, targetYaw: 0, rate: 0,
   };
 }
-// Balanço das pernas e dos braços (opostos entre si)
 function poseLimbs(o, phase, amount) {
   const s = Math.sin(phase) * amount;
   o.limbs.legL.rotation.x = s;
@@ -222,7 +245,6 @@ function poseLimbs(o, phase, amount) {
   o.limbs.armL.rotation.x = -s * 0.7;
   o.limbs.armR.rotation.x = s * 0.7;
 }
-// Anima uma pessoa: passada, leve sobe-e-desce e giro suave em direção ao destino
 function animateWalk(o, moving, dt) {
   const target = moving ? 0.6 : 0;
   o.amount += (target - o.amount) * Math.min(1, dt * 10);
@@ -235,27 +257,24 @@ function animateWalk(o, moving, dt) {
 
 // ---------- Mundo ----------
 function buildWorld() {
-  // Grama, chão do mercado e marcações
   addBox(0, -0.05, 0, 300, 0.1, 300, 0x66bb6a, false, false);
   addBox(0, 0.05, 0, 40, 0.1, 40, 0xffecb3, false, false);
-  for (let i = -18; i <= 18; i += 4) {                     // ladrilhos do piso
+  for (let i = -18; i <= 18; i += 4) {
     addBox(i, 0.1, 0, 0.08, 0.02, 40, 0xffd54f, false, false);
     addBox(0, 0.1, i, 40, 0.02, 0.08, 0xffd54f, false, false);
   }
-  addBox(0, 0.08, 18, 4, 0.03, 3, 0x8d6e63, false, false);  // tapete da entrada
+  addBox(0, 0.08, 18, 4, 0.03, 3, 0x8d6e63, false, false);
 
-  // Paredes do mercado (abertura oeste -> sala; abertura sul -> entrada de clientes)
   addBox(0, 2, -20.25, 40.5, 4, 0.5, WALL);
   addBox(20.25, 2, 0, 0.5, 4, 40.5, WALL);
   addBox(-20.25, 2, -11, 0.5, 4, 18, WALL);
   addBox(-20.25, 2, 11, 0.5, 4, 18, WALL);
   addBox(-11, 2, 20.25, 18, 4, 0.5, WALL);
   addBox(11, 2, 20.25, 18, 4, 0.5, WALL);
-  addBox(0, 3.5, 20.25, 4, 1, 0.5, WALL, false);            // verga da porta
-  addBox(0, 4.2, 20.25, 40, 0.3, 0.6, 0xff7043, false);     // faixa colorida no topo
+  addBox(0, 3.5, 20.25, 4, 1, 0.5, WALL, false);
+  addBox(0, 4.2, 20.25, 40, 0.3, 0.6, 0xff7043, false);
   addBox(0, 4.2, -20.25, 40, 0.3, 0.6, 0xff7043, false);
 
-  // Sala de segurança: x -32..-22, z -8..8
   addBox(-27, 2, -8.25, 10.5, 4, 0.5, ROOM);
   addBox(-27, 2, 8.25, 10.5, 4, 0.5, ROOM);
   addBox(-32.25, 2, 0, 0.5, 4, 16.5, ROOM);
@@ -264,27 +283,22 @@ function buildWorld() {
   addBox(-27, 0.05, 0, 10, 0.1, 16, 0xffe0b2, false, false);
   addBox(-21, 0.05, 0, 2.2, 0.1, 4.2, 0xffe0b2, false, false);
 
-  // Console de segurança (mesa + 4 monitores + cadeira)
   const consoleObj = placeModel('console', DESK.x, 0, DESK.z, 0);
   addCollider(DESK.x, DESK.z, 4, 1.5);
   for (let i = 0; i < 4; i++) consoleObj.getObjectByName('Screen' + i).material = screenMats[i];
 
-  // Prateleiras com produtos
   for (const sx of SHELF_X) {
     placeModel('shelf', sx, 0, 0, 0);
     addCollider(sx, 0, 1.2, 22);
   }
 
-  // Caixa (balcão com registradora e placa)
   placeModel('counter', -16.5, 0, -6, 0);
   addCollider(-16.5, -6, 1.8, 4);
 
-  // Câmeras de vigilância apontando para o centro do mercado
   for (const cam of CAMERAS) {
     placeModel('seccam', cam.x, 0, cam.z, Math.atan2(cam.tx - cam.x, cam.tz - cam.z));
   }
 
-  // Sensores da porta de entrada e feixe cruzando a passagem
   for (const sx of [-2.2, 2.2]) {
     const ds = placeModel('doorsensor', sx, 0, DOOR.z + 0.25, 0);
     const m = new THREE.MeshBasicMaterial({ color: 0x00e676 });
@@ -295,7 +309,6 @@ function buildWorld() {
   doorBeam.position.set(0, 1.0, DOOR.z + 0.25);
   scene.add(doorBeam);
 
-  // Avenida sul com semáforo, faixas, calçada e linhas de parada
   addBox(0, 0.05, 29, 110, 0.1, 10, 0x546e7a, false, false);
   for (let x = -50; x <= 50; x += 6) addBox(x, 0.12, 29.5, 3, 0.05, 0.2, 0xffffff, false, false);
   addBox(0, 0.06, 22, 110, 0.12, 4, 0xffe082, false, false);
@@ -308,26 +321,22 @@ function buildWorld() {
     lampMats.push({ name: key, bright, mat: m });
   }
 
-  // Avenidas em volta (norte, oeste e leste)
   addBox(0, 0.05, -30, 110, 0.1, 8, 0x546e7a, false, false);
   addBox(-40, 0.05, 0, 8, 0.1, 68, 0x546e7a, false, false);
   addBox(42, 0.05, 0, 8, 0.1, 68, 0x546e7a, false, false);
 
-  // Garagem ao lado do mercado, com janelas e letreiro
   addBox(29, 2.25, 2, 10, 4.5, 20, 0xff7043);
   for (const z of [-6, -2, 2, 6]) addBox(34.05, 2.6, z, 0.1, 1.0, 1.4, 0x81d4fa, false, false);
   addBox(29, 4.9, 11.9, 8, 0.7, 0.2, 0xffea00, false, false);
-  addBox(30, 0.06, 18, 6, 0.1, 12, 0x546e7a, false, false);    // acesso de veículos
-  addBox(30, 1.5, 12.1, 4, 3, 0.2, 0xffb300, false);           // portão da garagem
+  addBox(30, 0.06, 18, 6, 0.1, 12, 0x546e7a, false, false);
+  addBox(30, 1.5, 12.1, 4, 3, 0.2, 0xffb300, false);
 
-  // Câmera de placas na entrada do estacionamento
   placeModel('platecam', 26.2, 0, 23.6, Math.PI / 2);
   plateFlash = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
   plateFlash.position.set(27.6, 4.8, 23.6);
   plateFlash.visible = false;
   scene.add(plateFlash);
 
-  // Arbustos
   for (let i = 0; i < 14; i++) {
     const x = (Math.random() < 0.5 ? -1 : 1) * (50 + Math.random() * 8);
     const z = -45 + Math.random() * 90;
@@ -338,18 +347,19 @@ function buildWorld() {
 // ---------- Semáforo ----------
 let lightT = 0, lightState = 'green';
 function updateLight(dt) {
-  lightT = (lightT + dt) % 14;
-  lightState = lightT < 6 ? 'green' : lightT < 8 ? 'yellow' : 'red';
+  if (net.isHost) {
+    lightT = (lightT + dt) % 14;
+    lightState = lightT < 6 ? 'green' : lightT < 8 ? 'yellow' : 'red';
+  }
   for (const l of lampMats) l.mat.color.setHex(l.name === lightState ? l.bright : 0x333333);
 }
 
 // ---------- Carros ----------
 const cars = [];
-let carSpawnTimer = 0;
+let carSpawnTimer = 0, carSeq = 0;
 function makeCar(color) {
   const g = instantiate('car');
   paintPart(g, 'Body', color);
-  // placa traseira (branca), que a câmera fotografa
   const plate = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.5), new THREE.MeshBasicMaterial({ color: 0xffffff }));
   plate.position.set(-1.22, 0.7, 0);
   g.add(plate);
@@ -357,14 +367,15 @@ function makeCar(color) {
 }
 function spawnCar() {
   const dir = Math.random() < 0.5 ? 1 : -1;
-  const g = makeCar(CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)]);
+  const cor = CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)];
+  const g = makeCar(cor);
   const car = {
-    g, dir,
+    id: ++carSeq, cor, g, dir,
     x: dir > 0 ? -55 : 55,
     z: dir > 0 ? LANE_EAST : LANE_WEST,
     v: 6 + Math.random() * 3,
     cruise: 6 + Math.random() * 3,
-    turnIn: dir > 0 && Math.random() < 0.35,   // alguns carros entram no estacionamento
+    turnIn: dir > 0 && Math.random() < 0.35,
     turning: false,
     plate: null,
   };
@@ -382,14 +393,12 @@ function updateCars(dt) {
   for (const car of [...cars]) {
     let target = car.cruise;
     if (!car.turning) {
-      // Semáforo vermelho: para antes da linha
       if (lightState === 'red') {
         const sl = car.dir > 0 ? STOP_EAST : STOP_WEST;
         const front = car.x + car.dir * 1.2;
         const dist = (sl - front) * car.dir;
         if (dist >= 0 && dist < 3) target = 0;
       }
-      // Não bate no carro da frente
       for (const other of cars) {
         if (other === car || other.turning || other.dir !== car.dir || Math.abs(other.z - car.z) > 0.1) continue;
         const gap = (other.x - car.x) * car.dir;
@@ -397,7 +406,6 @@ function updateCars(dt) {
       }
     }
     car.v += (target - car.v) * Math.min(1, dt * 3);
-
     if (car.turning) {
       car.z -= 6 * dt;
       if (car.z <= GARAGE_DOOR_Z) { removeCar(car); continue; }
@@ -415,14 +423,13 @@ function updateCars(dt) {
   }
 }
 
-// ---------- Jogador (segurança) ----------
+// ---------- Jogador local (seu guarda) ----------
 const player = { x: -27, z: 0, yaw: Math.PI };
-let playerView = null;   // criado quando os modelos carregarem
+let playerView = null;
 
-// ---------- Clientes ----------
+// ---------- Clientes (simulados pelo anfitrião) ----------
 const customers = [];
-let spawnTimer = 0;
-let customerSeq = 0;
+let spawnTimer = 0, customerSeq = 0;
 
 function randomShelfSpot() {
   const sx = SHELF_X[Math.floor(Math.random() * SHELF_X.length)];
@@ -438,14 +445,13 @@ function checkoutRouteFrom(x, z) {
 function exitRouteFrom(x, z) {
   return [{ x, z: CORRIDOR_Z }, { x: DOOR.x, z: CORRIDOR_Z }, { x: DOOR.x, z: DOOR.z + 2 }];
 }
-
 function spawnCustomer() {
   const thief = Math.random() < 0.3;
   const shirt = thief ? 0x212121 : SHIRTS[Math.floor(Math.random() * SHIRTS.length)];
   const p = buildPerson('customer', shirt);
-  p.bag.visible = !thief;              // quem furta não carrega cesta
+  p.bag.visible = !thief;
   const c = {
-    ...p, id: ++customerSeq, wasInside: false, thief, stolen: false, checked: false, visits: 0,
+    ...p, id: ++customerSeq, shirtColor: shirt, wasInside: false, thief, stolen: false, checked: false, visits: 0,
     state: 'walk', after: 'browse', path: [], timer: 0, walkTime: 0, browseTime: 0,
     speed: thief ? 2.0 : 1.5, rate: thief ? 5.2 : 3.9, x: DOOR.x, z: DOOR.z + 2,
   };
@@ -454,31 +460,27 @@ function spawnCustomer() {
   scene.add(c.group);
   customers.push(c);
 }
-
 function removeCustomer(c) {
   scene.remove(c.group);
   const i = customers.indexOf(c);
   if (i >= 0) customers.splice(i, 1);
 }
-
 function walkTo(c, path, after) {
   c.path = path;
   c.after = after;
   c.state = 'walk';
   c.walkTime = 0;
 }
-
-function enterState(c, state) {
-  c.state = state;
+function enterState(c, st) {
+  c.state = st;
   c.timer = 0;
-  if (state === 'browse') c.browseTime = 1.5 + Math.random() * 2.5;
-  if (state === 'pay') registerSale(c);
-  if (state === 'gone') {
-    if (c.thief && c.stolen) registerEscape(c);
+  if (st === 'browse') c.browseTime = 1.5 + Math.random() * 2.5;
+  if (st === 'pay') registrarVenda(c);
+  if (st === 'gone') {
+    if (c.thief && c.stolen) registrarFuga(c);
     removeCustomer(c);
   }
 }
-
 function moveTowards(c, tx, tz, dt) {
   const dx = tx - c.x, dz = tz - c.z;
   const d = Math.hypot(dx, dz);
@@ -490,7 +492,6 @@ function moveTowards(c, tx, tz, dt) {
   c.targetYaw = Math.atan2(dx, dz);
   return false;
 }
-
 function finishBrowse(c) {
   c.visits++;
   if (c.thief && !c.stolen && Math.random() < 0.8) {
@@ -498,15 +499,14 @@ function finishBrowse(c) {
     c.bulge.visible = true;
   }
   if (c.visits < 2) walkTo(c, shelfRouteFrom(c.x, c.z), 'browse');
-  else if (c.thief && c.stolen) walkTo(c, exitRouteFrom(c.x, c.z), 'gone');   // pula o caixa
+  else if (c.thief && c.stolen) walkTo(c, exitRouteFrom(c.x, c.z), 'gone');
   else walkTo(c, checkoutRouteFrom(c.x, c.z), 'pay');
 }
-
 function updateCustomer(c, dt) {
   c.timer += dt;
   if (c.state === 'walk') {
     c.walkTime += dt;
-    if (c.walkTime > 40) { removeCustomer(c); return; }   // segurança contra travamento
+    if (c.walkTime > 40) { removeCustomer(c); return; }
     if (c.path.length) {
       const wp = c.path[0];
       if (moveTowards(c, wp.x, wp.z, dt)) c.path.shift();
@@ -525,76 +525,89 @@ function updateCustomer(c, dt) {
   animateWalk(c, c.state === 'walk', dt);
 }
 
-// ---------- Estado do jogo ----------
-let state = 'menu';            // menu | playing | over
-let score = 0, caught = 0, escaped = 0, timeLeft = GAME_TIME;
-let monitorMode = false, camIndex = 0;
-
-const hudEl = document.getElementById('hud');
-const msgEl = document.getElementById('msg');
-const overlayEl = document.getElementById('overlay');
+// ---------- HUD e mensagens ----------
 let msgTimer = null;
-
 function showMsg(html, ms = 2500) {
-  msgEl.innerHTML = html;
-  msgEl.style.display = 'block';
+  const el = document.getElementById('msg');
+  el.innerHTML = html;
+  el.style.display = 'block';
   clearTimeout(msgTimer);
-  msgTimer = setTimeout(() => (msgEl.style.display = 'none'), ms);
+  msgTimer = setTimeout(() => (el.style.display = 'none'), ms);
 }
+function placarAtual() {
+  if (!net.isHost) return placar;
+  return Object.entries(scores).map(([id, s]) => ({ id, ...s }));
+}
+let monitorMode = false, camIndex = 0;
 function updateHud() {
-  let text = `Pontos: <b>${score}</b><br>Tempo: ${Math.ceil(timeLeft)}s<br>Furtos pegos: ${caught}<br>Escapes: ${escaped}`;
+  const p = placarAtual();
+  let text = `<b>Sala ${net.codigo}</b><br>Tempo: ${Math.ceil(timeLeft)}s`;
   text += `<br>Porta: ${sensorStats.entradas} entradas · ${sensorStats.saidas} saídas`;
   text += `<br>Placas capturadas: ${sensorStats.placas}`;
   if (recentPlates.length) text += `<br><small>${recentPlates.join('<br>')}</small>`;
+  text += '<br><b>Placar</b>';
+  for (const j of p) text += `<br>${escapeHtml(j.nome)}: ${j.pontos} pts · ${j.furtos || 0} furtos`;
   if (monitorMode) text += `<br><b>MODO CÂMERAS</b> – ${CAMERAS[camIndex].name}<br>1-4: trocar câmera · Q: sair`;
-  hudEl.innerHTML = text;
+  document.getElementById('hud').innerHTML = text;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function tryArrest() {
-  let target = null, best = ARREST_DISTANCE;
-  for (const c of customers) {
+// ---------- Abordagem ----------
+// Convidado: pede ao anfitrião. Anfitrião: resolve direto.
+function tentarAbordar() {
+  const lista = net.isHost ? customers : [...remotosClientes.values()];
+  let alvo = null, best = ARREST_DISTANCE;
+  for (const c of lista) {
     if (c.state === 'caught' || c.state === 'gone') continue;
     const d = Math.hypot(c.x - player.x, c.z - player.z);
-    if (d < best) { best = d; target = c; }
+    if (d < best) { best = d; alvo = c; }
   }
-  if (!target) return showMsg('Nenhum cliente por perto.', 1500);
+  if (!alvo) return showMsg('Nenhum cliente por perto.', 1500);
+  if (net.isHost) abordar(net.id, alvo.id);
+  else socket.emit('acao', { tipo: 'abordar', alvo: alvo.id });
+}
+function avisar(quemId, texto, ms = 2500) {
+  if (quemId === net.id) showMsg(texto, ms);
+  else emitir('msg', { para: quemId, texto, ms });
+}
+function abordar(quemId, alvoId) {
+  const c = customers.find((x) => x.id === alvoId);
+  if (!c || c.state === 'caught' || c.state === 'gone') return;
+  const pos = quemId === net.id ? player : posicoes[quemId];
+  if (!pos) return;
+  if (Math.hypot(c.x - pos.x, c.z - pos.z) > ARREST_DISTANCE + 0.5) return avisar(quemId, 'Cliente longe demais.', 1500);
+  const s = scores[quemId] || (scores[quemId] = { nome: '?', pontos: 0, furtos: 0, escapes: 0 });
 
-  if (target.thief) {
-    if (target.stolen) {
-      caught++;
-      score += 100;
+  if (c.thief) {
+    if (c.stolen) {
+      s.pontos += 100;
+      s.furtos++;
       const inf = infracoes[Math.floor(Math.random() * infracoes.length)];
-      showMsg(`✅ Furto detectado! +100 pts<br><b>Infração ${inf.codigo}: ${inf.nome}</b><br>${inf.descricao}`, 6000);
-      addRegistro(`#${target.id} · detido por furto (Inf. ${inf.codigo})`, 'bad');
-      enviarDados('/api/caixa', { tipo: 'detido', cliente_id: target.id, observacao: `Infração ${inf.codigo}` });
-      target.state = 'caught';
-      target.timer = 0;
-      target.path = [];
-      paintPart(target.group, 'Shirt', 0xff1744);
-      target.marker.visible = false;
+      avisar(quemId, `✅ Furto detectado! +100 pts<br><b>Infração ${inf.codigo}: ${inf.nome}</b><br>${inf.descricao}`, 6000);
+      registrar('bad', `#${c.id} · detido por furto (Inf. ${inf.codigo})`,
+        { tipo: 'detido', cliente_id: c.id, observacao: `Infração ${inf.codigo}` });
+      c.state = 'caught';
+      c.timer = 0;
+      c.path = [];
+      paintPart(c.group, 'Shirt', 0xff1744);
+      c.marker.visible = false;
     } else {
-      score -= 20;
-      showMsg('Sem provas: este cliente não pegou nada. -20 pts', 3000);
+      s.pontos -= 20;
+      avisar(quemId, 'Sem provas: este cliente não pegou nada. -20 pts', 3000);
     }
   } else {
-    if (target.checked) return showMsg('Este cliente já foi abordado.', 1500);
-    target.checked = true;
-    score -= 30;
-    showMsg('Cliente inocente abordado! Ele ficou irritado. -30 pts', 3000);
+    if (c.checked) return avisar(quemId, 'Este cliente já foi abordado.', 1500);
+    c.checked = true;
+    s.pontos -= 30;
+    avisar(quemId, 'Cliente inocente abordado! Ele ficou irritado. -30 pts', 3000);
   }
-  updateHud();
 }
 
 // ---------- Sala de câmeras ----------
 function nearDesk() {
   return Math.hypot(player.x - DESK.x, player.z - DESK.z) < 3;
-}
-function enterMonitor() {
-  monitorMode = true;
-  camIndex = 0;
-}
-function exitMonitor() {
-  monitorMode = false;
 }
 function updateScreens() {
   screenMats.forEach((m, i) => {
@@ -603,14 +616,13 @@ function updateScreens() {
   });
 }
 
-// ---------- Jogador: movimento e câmera ----------
+// ---------- Movimento e câmera ----------
 function updatePlayer(dt) {
   let f = 0, s = 0;
   if (keys.KeyW || keys.ArrowUp) f += 1;
   if (keys.KeyS || keys.ArrowDown) f -= 1;
   if (keys.KeyD || keys.ArrowRight) s += 1;
   if (keys.KeyA || keys.ArrowLeft) s -= 1;
-  // Câmera fixa em diagonal: W = para longe da câmera, D = direita da tela
   const k = 1 / Math.SQRT2;
   let mx = k * f + k * s, mz = -k * f + k * s;
   const len = Math.hypot(mx, mz);
@@ -618,18 +630,26 @@ function updatePlayer(dt) {
     mx /= len; mz /= len;
     player.x += mx * PLAYER_SPEED * dt;
     player.z += mz * PLAYER_SPEED * dt;
-    player.yaw = Math.atan2(mx, mz);      // o segurança olha para onde anda
+    player.yaw = Math.atan2(mx, mz);
     resolveCollisions(player, PLAYER_RADIUS);
     player.x = Math.max(-60, Math.min(60, player.x));
     player.z = Math.max(-60, Math.min(60, player.z));
   }
+  player.moving = len > 0;
   if (playerView) {
-    playerView.group.position.set(player.x, 0, player.z);
+    playerView.group.position.x = player.x;
+    playerView.group.position.z = player.z;
     playerView.targetYaw = player.yaw;
     animateWalk(playerView, len > 0, dt);
   }
 }
-
+let posTimer = 0;
+function enviarPosicao(dt) {
+  posTimer += dt;
+  if (posTimer < 0.1) return;
+  posTimer = 0;
+  socket.emit('posicao', { x: player.x, z: player.z, yaw: player.yaw, moving: !!player.moving });
+}
 function updateCamera() {
   if (monitorMode) {
     const cam = CAMERAS[camIndex];
@@ -637,29 +657,26 @@ function updateCamera() {
     camera.lookAt(cam.tx, 1.2, cam.tz);
     return;
   }
-  // Ângulo alto e diagonal, como na imagem de referência
   camera.position.set(player.x - 17, 21, player.z + 17);
   camera.lookAt(player.x, 0.5, player.z);
 }
 
-// ---------- Entrada ----------
+// ---------- Teclado ----------
 const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (state !== 'playing') return;
   if (monitorMode) {
-    if (e.code === 'KeyQ' || e.code === 'Escape') exitMonitor();
+    if (e.code === 'KeyQ' || e.code === 'Escape') monitorMode = false;
     if (e.code === 'Digit1') camIndex = 0;
     if (e.code === 'Digit2') camIndex = 1;
     if (e.code === 'Digit3') camIndex = 2;
     if (e.code === 'Digit4') camIndex = 3;
-    updateHud();
     return;
   }
   if (e.code === 'KeyE' && !e.repeat) {
-    if (nearDesk()) enterMonitor();
-    else tryArrest();
-    updateHud();
+    if (nearDesk()) { monitorMode = true; camIndex = 0; }
+    else tentarAbordar();
   }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -669,23 +686,29 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ---------- Caixa: registro de compras e pagamentos ----------
+// ---------- Caixa ----------
 const caixaLog = document.getElementById('caixaLog');
 const caixaTotal = document.getElementById('caixaTotal');
 let salesCount = 0, salesTotal = 0, lostCount = 0;
 const FORMAS_PAGTO = ['Dinheiro', 'Cartão', 'Pix'];
 const formatBRL = (v) => 'R$ ' + v.toFixed(2).replace('.', ',');
-function addRegistro(text, kind) {
+function addRegistro(css, texto) {
   const div = document.createElement('div');
-  div.className = 'reg ' + kind;
-  div.textContent = text;
+  div.className = 'reg ' + css;
+  div.textContent = texto;
   caixaLog.prepend(div);
   while (caixaLog.children.length > 7) caixaLog.lastChild.remove();
 }
 function updateCaixaTotal() {
   caixaTotal.textContent = `Vendas: ${salesCount} · Total: ${formatBRL(salesTotal)} · Sem pagar: ${lostCount}`;
 }
-function registerSale(c) {
+// Registra no caixa local e avisa os outros jogadores; payload vai para o banco (só anfitrião)
+function registrar(css, texto, payload = null) {
+  addRegistro(css, texto);
+  emitir('caixa', { css, texto });
+  if (payload) enviarDados('/api/caixa', payload);
+}
+function registrarVenda(c) {
   const itens = 1 + Math.floor(Math.random() * 6);
   let total = 0;
   for (let i = 0; i < itens; i++) total += 2 + Math.random() * 18;
@@ -693,9 +716,17 @@ function registerSale(c) {
   const forma = FORMAS_PAGTO[Math.floor(Math.random() * FORMAS_PAGTO.length)];
   salesCount++;
   salesTotal += total;
-  addRegistro(`#${c.id} · ${itens} ${itens > 1 ? 'itens' : 'item'} · ${formatBRL(total)} · ${forma}`, 'ok');
-  enviarDados('/api/caixa', { tipo: 'venda', cliente_id: c.id, itens, total, forma_pagamento: forma });
+  registrar('ok', `#${c.id} · ${itens} ${itens > 1 ? 'itens' : 'item'} · ${formatBRL(total)} · ${forma}`,
+    { tipo: 'venda', cliente_id: c.id, itens, total, forma_pagamento: forma });
   updateCaixaTotal();
+}
+function registrarFuga(c) {
+  lostCount++;
+  piscaPorta(0xffea00);
+  for (const s of Object.values(scores)) s.pontos -= 40;
+  registrar('bad', `#${c.id} · SAIU SEM PAGAR (furto)`, { tipo: 'sem_pagar', cliente_id: c.id, observacao: 'furto' });
+  updateCaixaTotal();
+  avisar(net.id, '🚨 Um furto escapou pela porta! A equipe perde 40 pts', 3000);
 }
 function resetCaixa() {
   salesCount = 0; salesTotal = 0; lostCount = 0;
@@ -705,14 +736,22 @@ function resetCaixa() {
   updateCaixaTotal();
 }
 
-// ---------- Sensores da porta e câmera de placas ----------
+// Envio de dados ao banco (somente o anfitrião grava)
+function enviarDados(url, corpo) {
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessao: sessaoId, ...corpo }),
+  }).catch(() => {});
+}
+
+// ---------- Sensores ----------
 const sensorStats = { entradas: 0, saidas: 0, placas: 0 };
 const recentPlates = [];
 let doorFlashT = 0, plateFlashT = 0;
 const PLATE_LETTERS = 'ABCDEFGHIJKLMNOPRSTUVWXYZ';
 const pick = (s) => s[Math.floor(Math.random() * s.length)];
 const digit = () => String(Math.floor(Math.random() * 10));
-// Placa no padrão Mercosul: LLLNLNN
 const randomPlate = () => pick(PLATE_LETTERS) + pick(PLATE_LETTERS) + pick(PLATE_LETTERS) + digit() + pick(PLATE_LETTERS) + digit() + digit();
 
 function flashDoor(hex) {
@@ -720,26 +759,32 @@ function flashDoor(hex) {
   doorLedMats.forEach((m) => m.color.setHex(hex));
   doorFlashT = 0.6;
 }
-// Conta entradas e saídas quando um cliente cruza a porta
+function piscaPorta(hex) {
+  flashDoor(hex);
+  emitir('porta', { cor: hex });
+}
 function checkDoor(c) {
   const inside = c.z < DOOR.z;
   if (inside !== c.wasInside) {
     if (Math.abs(c.x - DOOR.x) < 2.5 && Math.abs(c.z - DOOR.z) < 1.5) {
-      if (inside) { sensorStats.entradas++; flashDoor(0x00e676); }
-      else { sensorStats.saidas++; flashDoor(0x40c4ff); }
+      if (inside) { sensorStats.entradas++; piscaPorta(0x00e676); }
+      else { sensorStats.saidas++; piscaPorta(0x40c4ff); }
     }
     c.wasInside = inside;
   }
 }
-// Foto da placa quando um carro entra no estacionamento
+function piscaPlaca() {
+  plateFlash.visible = true;
+  plateFlashT = 0.25;
+}
 function photographPlate(car) {
   car.plate = randomPlate();
   sensorStats.placas++;
   recentPlates.unshift(`${car.plate} · ${new Date().toLocaleTimeString('pt-BR')}`);
   recentPlates.length = Math.min(recentPlates.length, 3);
+  piscaPlaca();
+  emitir('placa', { placa: car.plate });
   enviarDados('/api/placas', { placa: car.plate, capturada_em: new Date().toISOString() });
-  plateFlash.visible = true;
-  plateFlashT = 0.25;
 }
 function updateFlashes(dt) {
   if (doorFlashT > 0) {
@@ -754,53 +799,318 @@ function updateFlashes(dt) {
     if (plateFlashT <= 0) plateFlash.visible = false;
   }
 }
-function registerEscape(c) {
-  escaped++;
-  lostCount++;
-  flashDoor(0xffea00);
-  score -= 40;
-  addRegistro(`#${c.id} · SAIU SEM PAGAR (furto)`, 'bad');
-  enviarDados('/api/caixa', { tipo: 'sem_pagar', cliente_id: c.id, observacao: 'furto' });
+
+// ---------- Guardas e objetos dos outros jogadores ----------
+function corDoJogador(id) {
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return GUARD_COLORS[h % GUARD_COLORS.length];
+}
+function criarRemoto(id, nome) {
+  const p = buildPerson('guard', corDoJogador(id));
+  p.rate = PLAYER_SPEED * 2.6;
+  p.group.position.set(-27, 0, 0);
+  scene.add(p.group);
+  const r = { p, nome, x: -27, z: 0, tx: -27, tz: 0, yaw: 0 };
+  remotos.set(id, r);
+  return r;
+}
+function removerRemoto(id) {
+  const r = remotos.get(id);
+  if (r) { scene.remove(r.p.group); remotos.delete(id); }
+  delete posicoes[id];
+}
+function atualizarPosicaoRemota(d) {
+  if (!modelsReady) return;
+  const r = remotos.get(d.id) || criarRemoto(d.id, (net.jogadores.find((j) => j.id === d.id) || {}).nome || 'Guarda');
+  r.tx = d.x; r.tz = d.z; r.yaw = d.yaw;
+  r.moving = d.moving;
+  if (net.isHost) posicoes[d.id] = { x: d.x, z: d.z };
+}
+function criarClienteRemoto(item) {
+  const p = buildPerson('customer', item.cor);
+  p.bag.visible = !item.ladrao;
+  p.rate = 3.9;
+  p.group.position.set(item.x, 0, item.z);
+  scene.add(p.group);
+  return { id: item.id, p, x: item.x, z: item.z, tx: item.x, tz: item.z, yaw: item.yaw, state: item.st, ladrao: item.ladrao, furtou: item.furtou, pintado: false };
+}
+function aplicarSnapshot(s) {
+  if (!modelsReady) return;
+  placar = s.placar || [];
+  salesCount = s.caixa.vendas; salesTotal = s.caixa.total; lostCount = s.caixa.perdidas;
   updateCaixaTotal();
-  showMsg('🚨 Um furto escapou pela porta! -40 pts', 3000);
+  Object.assign(sensorStats, s.sensores);
+  recentPlates.length = 0;
+  recentPlates.push(...(s.placas || []));
+  lightState = s.luz;
+  timeLeft = s.tempo;
+
+  const vistos = new Set();
+  for (const item of s.clientes) {
+    vistos.add(item.id);
+    let r = remotosClientes.get(item.id);
+    if (!r) { r = criarClienteRemoto(item); remotosClientes.set(item.id, r); }
+    r.tx = item.x; r.tz = item.z; r.yaw = item.yaw; r.state = item.st; r.furtou = item.furtou; r.ladrao = item.ladrao;
+    r.p.bulge.visible = item.furtou;
+    if (item.st === 'caught' && !r.pintado) { paintPart(r.p.group, 'Shirt', 0xff1744); r.pintado = true; }
+  }
+  for (const [id, r] of remotosClientes) {
+    if (!vistos.has(id)) { scene.remove(r.p.group); remotosClientes.delete(id); }
+  }
+
+  const carrosVistos = new Set();
+  for (const item of s.carros) {
+    carrosVistos.add(item.id);
+    let r = remotosCarros.get(item.id);
+    if (!r) {
+      const g = makeCar(item.cor);
+      scene.add(g);
+      r = { g, x: item.x, z: item.z, tx: item.x, tz: item.z };
+      remotosCarros.set(item.id, r);
+    }
+    r.tx = item.x; r.tz = item.z; r.dir = item.dir; r.virando = item.virando;
+  }
+  for (const [id, r] of remotosCarros) {
+    if (!carrosVistos.has(id)) { scene.remove(r.g); remotosCarros.delete(id); }
+  }
+}
+function montarSnapshot() {
+  return {
+    tempo: timeLeft,
+    luz: lightState,
+    placar: placarAtual(),
+    caixa: { vendas: salesCount, total: salesTotal, perdidas: lostCount },
+    sensores: { ...sensorStats },
+    placas: [...recentPlates],
+    clientes: customers.map((c) => ({
+      id: c.id, x: c.x, z: c.z, yaw: c.targetYaw, st: c.state, furtou: c.stolen, ladrao: c.thief, cor: c.shirtColor,
+    })),
+    carros: cars.map((c) => ({ id: c.id, x: c.x, z: c.z, dir: c.dir, cor: c.cor, virando: c.turning })),
+  };
+}
+// Atualiza posições e animações de todos os outros personagens (a cada quadro)
+function atualizarRemotos(dt) {
+  const k = Math.min(1, dt * 10);
+  for (const r of remotos.values()) {
+    const dx = r.tx - r.x, dz = r.tz - r.z;
+    r.x += dx * k; r.z += dz * k;
+    r.p.group.position.x = r.x;
+    r.p.group.position.z = r.z;
+    r.p.targetYaw = r.yaw;
+    animateWalk(r.p, r.moving && Math.hypot(dx, dz) > 0.02, dt);
+  }
+  for (const r of remotosClientes.values()) {
+    const dx = r.tx - r.x, dz = r.tz - r.z;
+    r.x += dx * k; r.z += dz * k;
+    r.p.group.position.x = r.x;
+    r.p.group.position.z = r.z;
+    r.p.targetYaw = r.yaw;
+    r.p.marker.visible = monitorMode && r.furtou && r.state !== 'caught';
+    animateWalk(r.p, Math.hypot(dx, dz) > 0.05, dt);
+  }
+  for (const r of remotosCarros.values()) {
+    const dx = r.tx - r.x, dz = r.tz - r.z;
+    r.x += dx * k; r.z += dz * k;
+    r.g.position.set(r.x, 0, r.z);
+    r.g.rotation.y = r.virando ? Math.PI / 2 : (r.dir > 0 ? 0 : Math.PI);
+  }
+}
+function limparRemotosCenas() {
+  for (const r of remotosClientes.values()) scene.remove(r.p.group);
+  for (const r of remotosCarros.values()) scene.remove(r.g);
+  remotosClientes.clear();
+  remotosCarros.clear();
 }
 
-// ---------- Envio de dados ao servidor (bancos caixa.db e placas.db) ----------
-let sessaoId = '';
-function enviarDados(url, corpo) {
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessao: sessaoId, ...corpo }),
-  }).catch(() => { /* servidor offline: o jogo continua normalmente */ });
+// Eventos enviados pelo anfitrião
+function tratarEvento(e) {
+  switch (e.tipo) {
+    case 'caixa': addRegistro(e.css, e.texto); break;
+    case 'porta': flashDoor(e.cor); break;
+    case 'placa': piscaPlaca(); break;
+    case 'msg': if (!e.para || e.para === net.id) showMsg(e.texto, e.ms); break;
+    case 'fim': finalizarLocal(e.placar); break;
+  }
 }
 
-// ---------- Início / fim ----------
+// ---------- Fotos da equipe ----------
+function adicionarFoto(f) {
+  fotos.unshift(f);
+  fotos.length = Math.min(fotos.length, 5);
+  renderFotos();
+  showMsg(`📷 ${escapeHtml(f.de)} compartilhou uma foto`, 2000);
+}
+function renderFotos() {
+  const el = document.getElementById('fotosLista');
+  el.innerHTML = '';
+  for (const f of fotos) {
+    const fig = document.createElement('figure');
+    fig.innerHTML = `<img src="${f.imagem}" alt=""><figcaption>${escapeHtml(f.de)}</figcaption>`;
+    el.appendChild(fig);
+  }
+}
+
+// ---------- Telas (menu, lobby, fim) ----------
+const ov = document.getElementById('overlay');
+function erroMenu(t) {
+  const el = document.getElementById('erroMenu');
+  if (el) el.textContent = t;
+}
+function telaMenu() {
+  state = 'menu';
+  ov.style.display = 'flex';
+  ov.innerHTML = `
+    <h1>SupermarketSecurity.io</h1>
+    <p>Multiplayer: um jogador cria a sala e os seguranças entram com o código.</p>
+    <p>Você é o segurança do supermercado. Vigie os clientes pelas câmeras e aborde quem estiver furtando.</p>
+    <label>Seu nome<input id="nomeInput" maxlength="16"></label>
+    <button id="btnCriar">Criar sala</button>
+    <hr style="width:300px;border-color:#444">
+    <label>Código da sala<input id="codigoInput" maxlength="5" style="text-transform:uppercase"></label>
+    <button id="btnEntrar" class="sec">Entrar como segurança</button>
+    <p class="erro" id="erroMenu"></p>
+    <p style="font-size:14px;color:#90a4ae">Celular do segurança: abra /celular no navegador do telefone.</p>`;
+  document.getElementById('btnCriar').onclick = criarSala;
+  document.getElementById('btnEntrar').onclick = entrarSala;
+}
+function criarSala() {
+  const nome = document.getElementById('nomeInput').value.trim();
+  if (!nome) return erroMenu('Digite seu nome.');
+  socket.emit('criar_sala', { nome }, (resp) => {
+    if (resp.erro) return erroMenu(resp.erro);
+    net.codigo = resp.codigo;
+    net.isHost = true;
+    net.id = socket.id;
+    net.nome = nome;
+    net.jogadores = [{ id: socket.id, nome, papel: 'seguranca', host: true }];
+    telaLobby();
+  });
+}
+function entrarSala() {
+  const nome = document.getElementById('nomeInput').value.trim();
+  const codigo = document.getElementById('codigoInput').value.trim().toUpperCase();
+  if (!nome) return erroMenu('Digite seu nome.');
+  if (!codigo) return erroMenu('Digite o código da sala.');
+  socket.emit('entrar_sala', { codigo, nome, papel: 'seguranca' }, (resp) => {
+    if (resp.erro) return erroMenu(resp.erro);
+    net.codigo = resp.codigo;
+    net.isHost = false;
+    net.id = socket.id;
+    net.nome = nome;
+    (resp.fotos || []).reverse().forEach(adicionarFoto);
+    telaLobby();
+  });
+}
+function telaLobby() {
+  state = 'lobby';
+  ov.style.display = 'flex';
+  ov.innerHTML = `
+    <h1>Sala de espera</h1>
+    <p>Código da sala:</p>
+    <div class="codigo">${net.codigo}</div>
+    <p>Compartilhe o código com os seguranças.</p>
+    <ul id="listaJogadores"></ul>
+    ${net.isHost
+      ? '<button id="btnIniciar" disabled>Iniciar partida</button>'
+      : '<p>Aguardando o anfitrião iniciar a partida...</p>'}
+    <button id="btnSair" class="sec">Sair</button>`;
+  document.getElementById('btnSair').onclick = () => location.reload();
+  if (net.isHost) document.getElementById('btnIniciar').onclick = () => socket.emit('iniciar');
+  renderLobby();
+}
+function renderLobby() {
+  const ul = document.getElementById('listaJogadores');
+  if (!ul) return;
+  ul.innerHTML = net.jogadores.map((j) =>
+    `<li>${j.papel === 'celular' ? '📱' : '🛡️'} ${escapeHtml(j.nome)}${j.host ? ' (anfitrião)' : ''}</li>`).join('');
+  const btn = document.getElementById('btnIniciar');
+  if (btn) btn.disabled = !modelsReady;
+}
+function telaFim(pl) {
+  state = 'over';
+  ov.style.display = 'flex';
+  const linhas = pl.map((j) => `<tr><td>${escapeHtml(j.nome)}</td><td>${j.pontos}</td><td>${j.furtos || 0}</td></tr>`).join('');
+  ov.innerHTML = `
+    <h1>Fim de turno</h1>
+    <table><tr><th>Segurança</th><th>Pontos</th><th>Furtos pegos</th></tr>${linhas}</table>
+    <button id="btnSair">Voltar ao menu</button>`;
+  document.getElementById('btnSair').onclick = () => location.reload();
+}
+
+// ---------- Início / fim da partida ----------
 function resetGame() {
   for (const c of [...customers]) removeCustomer(c);
   for (const car of [...cars]) removeCar(car);
-  score = 0; caught = 0; escaped = 0; timeLeft = GAME_TIME;
+  limparRemotosCenas();
   player.x = -27; player.z = 0; player.yaw = Math.PI;
   monitorMode = false; camIndex = 0;
   spawnTimer = 0; carSpawnTimer = 0;
+  timeLeft = GAME_TIME;
   resetCaixa();
 }
+let timeLeft = GAME_TIME;
 function startGame() {
+  if (!modelsReady) return;
   resetGame();
-  sessaoId = new Date().toISOString();
   state = 'playing';
-  overlayEl.style.display = 'none';
+  ov.style.display = 'none';
+  if (net.isHost) {
+    sessaoId = `${net.codigo}@${new Date().toISOString()}`;
+    scores = {};
+    for (const j of net.jogadores) {
+      if (j.papel === 'seguranca') scores[j.id] = { nome: j.nome, pontos: 0, furtos: 0, escapes: 0 };
+    }
+  }
   updateHud();
 }
-function endGame() {
-  state = 'over';
-  monitorMode = false;
-  document.getElementById('ovTitle').textContent = 'Fim de turno';
-  document.getElementById('ovText').textContent = `Pontuação final: ${score} · Furtos pegos: ${caught} · Escapes: ${escaped}`;
-  document.getElementById('startBtn').textContent = 'Jogar novamente';
-  overlayEl.style.display = 'flex';
+function finalizarPartida() {
+  const pl = placarAtual();
+  emitir('fim', { placar: pl });
+  finalizarLocal(pl);
 }
-document.getElementById('startBtn').addEventListener('click', startGame);
+function finalizarLocal(pl) {
+  monitorMode = false;
+  placar = pl;
+  telaFim(pl);
+}
+function simular(dt) {
+  timeLeft -= dt;
+  if (timeLeft <= 0) { timeLeft = 0; finalizarPartida(); return; }
+  spawnTimer -= dt;
+  if (spawnTimer <= 0 && customers.length < MAX_CUSTOMERS) {
+    spawnCustomer();
+    spawnTimer = 2 + Math.random() * 2;
+  }
+  carSpawnTimer -= dt;
+  if (carSpawnTimer <= 0 && cars.length < MAX_CARS) {
+    spawnCar();
+    carSpawnTimer = 2.5 + Math.random() * 2;
+  }
+  for (const c of [...customers]) updateCustomer(c, dt);
+  updateCars(dt);
+  updateHud();
+}
+
+// ---------- Socket ----------
+socket.on('jogadores', (lista) => {
+  net.jogadores = lista;
+  if (state === 'lobby') renderLobby();
+});
+socket.on('iniciar', () => startGame());
+socket.on('posicao', (d) => atualizarPosicaoRemota(d));
+socket.on('snapshot', (s) => aplicarSnapshot(s));
+socket.on('evento', (e) => tratarEvento(e));
+socket.on('foto', (f) => adicionarFoto(f));
+socket.on('acao', (a) => { if (net.isHost && a.tipo === 'abordar') abordar(a.de, a.alvo); });
+socket.on('saiu', (d) => removerRemoto(d.id));
+socket.on('sala_encerrada', (d) => {
+  ov.style.display = 'flex';
+  ov.innerHTML = `<h1>Sala encerrada</h1><p>${escapeHtml(d.motivo)}</p><button id="btnSair">Voltar ao menu</button>`;
+  document.getElementById('btnSair').onclick = () => location.reload();
+  state = 'over';
+});
+socket.on('connect', () => { net.id = socket.id; });
 
 // ---------- Carregamento dos modelos ----------
 const gltfLoader = new GLTFLoader();
@@ -819,41 +1129,38 @@ Promise.all(MODEL_NAMES.map(loadModel))
     playerView.targetYaw = player.yaw;
     playerView.rate = PLAYER_SPEED * 2.6;
     scene.add(playerView.group);
-    const btn = document.getElementById('startBtn');
-    btn.disabled = false;
-    btn.textContent = 'Começar';
+    modelsReady = true;
+    if (state === 'lobby') renderLobby();
   })
   .catch((err) => {
-    document.getElementById('ovText').textContent = 'Erro ao carregar os modelos: ' + err.message;
-    document.getElementById('startBtn').textContent = 'Erro';
+    ov.innerHTML = `<h1>Erro</h1><p>Não foi possível carregar os modelos: ${escapeHtml(err.message)}</p>`;
   });
+
+telaMenu();
 
 // ---------- Loop ----------
 const clock = new THREE.Clock();
+let snapTimer = 0;
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (state === 'playing') {
     updateLight(dt);
     if (!monitorMode) updatePlayer(dt);
-    timeLeft -= dt;
-    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
-
-    spawnTimer -= dt;
-    if (spawnTimer <= 0 && customers.length < MAX_CUSTOMERS) {
-      spawnCustomer();
-      spawnTimer = 2 + Math.random() * 2;
+    enviarPosicao(dt);
+    if (net.isHost) {
+      simular(dt);
+      snapTimer += dt;
+      if (snapTimer >= 0.1) {
+        snapTimer = 0;
+        socket.emit('snapshot', montarSnapshot());
+      }
+    } else {
+      updateHud();
     }
-    carSpawnTimer -= dt;
-    if (carSpawnTimer <= 0 && cars.length < MAX_CARS) {
-      spawnCar();
-      carSpawnTimer = 2.5 + Math.random() * 2;
-    }
-    for (const c of [...customers]) updateCustomer(c, dt);
-    updateCars(dt);
-    updateHud();
   } else {
     updateLight(dt);
   }
+  atualizarRemotos(dt);
   updateFlashes(dt);
   updateScreens();
   updateCamera();
